@@ -13,77 +13,32 @@ but WITHOUT ANY WARRANTY.
 #include "Dependencies\glew.h"
 #include "Dependencies\freeglut.h"
 
-#include "Renderer.h"
+#include "TutorialLevel.h"
 
-Renderer *g_Renderer = NULL;
-
-void RenderScene(void)
-{
-	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-	glClearColor(0.0f, 0.3f, 0.3f, 1.0f);
-
-	// Renderer Test
-	g_Renderer->DrawSolidRect(0, 0, 0, 4, 1, 0, 1, 1);
-
-	glutSwapBuffers();
-}
-
-void Idle(void)
-{
-	RenderScene();
-}
-
-void MouseInput(int button, int state, int x, int y)
-{
-	RenderScene();
-}
-
-void KeyInput(unsigned char key, int x, int y)
-{
-	RenderScene();
-}
-
-void SpecialKeyInput(int key, int x, int y)
-{
-	RenderScene();
-}
-
-int main(int argc, char **argv)
-{
-	// Initialize GL things
-	glutInit(&argc, argv);
-	glutInitDisplayMode(GLUT_DEPTH | GLUT_DOUBLE | GLUT_RGBA);
-	glutInitWindowPosition(0, 0);
-	glutInitWindowSize(500, 500);
-	glutCreateWindow("Game Software Engineering KPU");
-
-	glewInit();
-	if (glewIsSupported("GL_VERSION_3_0"))
-	{
-		std::cout << " GLEW Version is 3.0\n ";
-	}
-	else
-	{
-		std::cout << "GLEW 3.0 not supported\n ";
-	}
-
-	// Initialize Renderer
-	g_Renderer = new Renderer(500, 500);
-	if (!g_Renderer->IsInitialized())
-	{
-		std::cout << "Renderer could not be initialized.. \n";
-	}
-
-	glutDisplayFunc(RenderScene);
-	glutIdleFunc(Idle);
-	glutKeyboardFunc(KeyInput);
-	glutMouseFunc(MouseInput);
-	glutSpecialFunc(SpecialKeyInput);
-
-	glutMainLoop();
-
-	delete g_Renderer;
-
-    return 0;
+int main(int argc, char** argv) {
+    glutInit(&argc, argv);
+    glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGBA | GLUT_DEPTH);
+    glutInitContextVersion(3,3);
+    glutInitContextProfile(GLUT_COMPATIBILITY_PROFILE);
+    glutInitWindowSize(1280,800);
+    glutCreateWindow("Willowmere");
+    SetWindowTextW(WindowFromDC(wglGetCurrentDC()),L"윌로미어 - 작은 시작");
+    if(glewInit()!=GLEW_OK) {
+        MessageBoxW(nullptr,L"그래픽 기능을 초기화하지 못했습니다.",L"실행 오류",MB_OK|MB_ICONERROR);
+        return 1;
+    }
+    if(!Tutorial::Initialize(1280,800)) {
+        MessageBoxW(nullptr,L"렌더러 초기화에 실패했습니다. OpenGL 3.3 호환 드라이버를 확인하세요.",L"실행 오류",MB_OK|MB_ICONERROR);
+        Tutorial::Shutdown();
+        return 1;
+    }
+    glutSetOption(GLUT_ACTION_ON_WINDOW_CLOSE, GLUT_ACTION_GLUTMAINLOOP_RETURNS);
+    Tutorial::Reset();
+    glutDisplayFunc(Tutorial::Render); glutReshapeFunc(Tutorial::Resize);
+    glutKeyboardFunc(Tutorial::KeyDown); glutKeyboardUpFunc(Tutorial::KeyUp);
+    glutVisibilityFunc(Tutorial::Visibility); glutIgnoreKeyRepeat(1);
+    glutCloseFunc(Tutorial::Shutdown);
+    glutTimerFunc(16,Tutorial::Tick,0);
+    glutMainLoop(); return 0;
 }
 
