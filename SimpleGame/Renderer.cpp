@@ -328,17 +328,28 @@ void Renderer::BeginScene(float x, float z)
     MaterialMode();
 }
 
-void Renderer::MaterialMode(int material, float emission)
+void Renderer::MaterialMode(int material, float emission, float textureRepeat)
 {
     if (shadowPass)
         return;
     glUniform1i(materialLocation, material >= 0 ? 1 : 0);
     glUniform1f(emissionLocation, emission);
+    glUniform1f(glGetUniformLocation(worldProgram, "textureRepeat"), textureRepeat);
     if (material >= 0 && material < MaterialCount)
     {
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, materials[material]);
     }
+}
+
+void Renderer::EffectMode(int effect, float seconds)
+{
+    if (shadowPass)
+    {
+        return;
+    }
+    glUniform1i(glGetUniformLocation(worldProgram, "effect"), effect);
+    glUniform1f(glGetUniformLocation(worldProgram, "effectTime"), seconds);
 }
 
 void Renderer::EndScene()

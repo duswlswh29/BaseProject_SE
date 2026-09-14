@@ -168,12 +168,18 @@
     <ClInclude Include="Renderer.h" />
     <ClInclude Include="RenderShaders.h" />
     <ClInclude Include="TutorialLevel.h" />
+    <ClInclude Include="LevelOne.h" />
+    <ClInclude Include="RpgWorld.h" />
+    <ClInclude Include="ModelCache.h" />
     <ClInclude Include="stdafx.h" />
     <ClInclude Include="targetver.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="Renderer.cpp" />
     <ClCompile Include="TutorialLevel.cpp" />
+    <ClCompile Include="LevelOne.cpp" />
+    <ClCompile Include="RpgWorld.cpp" />
+    <ClCompile Include="ModelCache.cpp" />
     <ClCompile Include="SimpleGame.cpp" />
     <ClCompile Include="stdafx.cpp">
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Create</PrecompiledHeader>

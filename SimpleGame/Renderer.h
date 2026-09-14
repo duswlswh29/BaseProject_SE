@@ -39,7 +39,9 @@ class Renderer
     void Resize(int width, int height);
     void BeginShadow(float cameraX, float cameraZ);
     void BeginScene(float cameraX, float cameraZ);
-    void MaterialMode(int material = -1, float emission = 0);
+    void MaterialMode(int material = -1, float emission = 0, float textureRepeat = 1);
+    // 0: ordinary mesh, 1: water, 2: flame. Geometry remains cached on the GPU.
+    void EffectMode(int effect = 0, float seconds = 0);
     void EndScene();
     void BeginUI();
     void Text(float x,

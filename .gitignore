@@ -12,3 +12,9 @@
 *.suo 
 *.db 
 
+# Generated model cache and local level-one progress.
+**/Cache/level1-models.bin
+**/Cache/level1-models.bin.tmp
+**/level1-progress.dat
+**/level1-progress.dat.tmp
+
