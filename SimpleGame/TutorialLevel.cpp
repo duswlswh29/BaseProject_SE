@@ -117,7 +117,13 @@ void Tick(int){
  moving=false;
  if(dialog.empty()){
  float sx=float(keys['d'])-float(keys['a']),sy=float(keys['w'])-float(keys['s']);float len=std::sqrt(sx*sx+sy*sy);
- if(len>0){float dx=(sx-sy)*.70710678f/len*3.2f*dt,dz=(-sx-sy)*.70710678f/len*3.2f*dt;
+ if(len>0){
+ // Inverse of the renderer's +45-degree Y rotation on the ground plane.
+ // Screen right = (+X,+Z), screen up = (+X,-Z).
+ // Facing is an output of movement, never an input to its direction.
+ const float step = 3.2f * dt / len;
+ const float dx = (sx + sy) * .70710678f * step;
+ const float dz = (sx - sy) * .70710678f * step;
  moving=true;facing=std::atan2(dx,dz)*180.f/3.14159265f;
  P next={player.x+dx,player.z};if(!Blocked(next))player=next;
  next={player.x,player.z+dz};if(!Blocked(next))player=next;walk+=dt*10;}}
