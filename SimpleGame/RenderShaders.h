@@ -1,6 +1,8 @@
 #pragma once
-namespace RenderShaders {
-static const char* WorldVS=R"GLSL(
+
+namespace RenderShaders
+{
+static const char *WorldVS = R"GLSL(
 #version 330 compatibility
 out vec3 normalEye;
 out vec4 tint;
@@ -14,7 +16,7 @@ void main(){
  gl_Position=gl_ProjectionMatrix*eye;
 }
 )GLSL";
-static const char* WorldFS=R"GLSL(
+static const char *WorldFS = R"GLSL(
 #version 330 compatibility
 in vec3 normalEye;
 in vec4 tint;
@@ -46,12 +48,12 @@ void main(){
  result=vec4(base.rgb*(lighting+emission),base.a);
 }
 )GLSL";
-static const char* PostVS=R"GLSL(
+static const char *PostVS = R"GLSL(
 #version 330 compatibility
 out vec2 uv;
 void main(){uv=gl_MultiTexCoord0.xy;gl_Position=gl_Vertex;}
 )GLSL";
-static const char* PostFS=R"GLSL(
+static const char *PostFS = R"GLSL(
 #version 330 compatibility
 in vec2 uv;
 uniform sampler2D scene;
