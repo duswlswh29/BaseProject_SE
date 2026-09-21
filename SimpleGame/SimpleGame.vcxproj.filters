@@ -21,6 +21,12 @@
     <Text Include="ReadMe.txt" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="Actor.h"><Filter>헤더 파일</Filter></ClInclude>
+    <ClInclude Include="SceneGraph.h"><Filter>헤더 파일</Filter></ClInclude>
+    <ClCompile Include="Actor.cpp"><Filter>소스 파일</Filter></ClCompile>
+    <ClCompile Include="SceneGraph.cpp"><Filter>소스 파일</Filter></ClCompile>
+  </ItemGroup>
+  <ItemGroup>
     <ClInclude Include="LevelOne.h"><Filter>헤더 파일</Filter></ClInclude>
     <ClInclude Include="RpgWorld.h"><Filter>헤더 파일</Filter></ClInclude>
     <ClInclude Include="ModelCache.h"><Filter>헤더 파일</Filter></ClInclude>

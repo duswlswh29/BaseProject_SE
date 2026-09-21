@@ -1,6 +1,8 @@
 #include "stdafx.h"
 #include "TutorialLevel.h"
 #include "Renderer.h"
+#include "SceneGraph.h"
+#include <utility>
 #include "Dependencies/freeglut.h"
 #include <memory>
 #include <algorithm>
@@ -74,6 +76,12 @@ struct Animal
 
 static std::vector<Animal> animals;
 static std::unique_ptr<Renderer> renderer;
+static SceneGraph scene;
+static ActorId heroActor = 0, creatureActor = 0, seedActor = 0, targetActor = 0, spellActor = 0;
+static std::vector<ActorId> animalActors;
+static std::vector<ActorId> breadcrumbActors;
+void BuildScene();
+void SyncScene();
 static bool moving = false;
 static float facing = 0;
 static const P seed = {-8, -6}, stone = {4, -4};
@@ -103,6 +111,7 @@ void Box(float x, float y, float z, float a, float b, float c, C color)
     glPushMatrix();
     glTranslatef(x, y, z);
     glScalef(a, b, c);
+    Renderer::CountToolkitShape();
     glutSolidCube(1);
     glPopMatrix();
 }
@@ -112,6 +121,7 @@ void Ball(float x, float y, float z, float r, C c)
     Color(c);
     glPushMatrix();
     glTranslatef(x, y, z);
+    Renderer::CountToolkitShape();
     glutSolidSphere(r, 10, 8);
     glPopMatrix();
 }
@@ -122,6 +132,7 @@ void Cone(float x, float y, float z, float r, float height, C c)
     glPushMatrix();
     glTranslatef(x, y, z);
     glRotatef(-90, 1, 0, 0);
+    Renderer::CountToolkitShape();
     glutSolidCone(r, height, 8, 1);
     glPopMatrix();
 }
@@ -129,7 +140,7 @@ void Cone(float x, float y, float z, float r, float height, C c)
 void Disk(float x, float y, float z, float rx, float rz, C c)
 {
     Color(c);
-    glBegin(GL_TRIANGLE_FAN);
+    Renderer::CountedBegin(GL_TRIANGLE_FAN);
     glNormal3f(0, 1, 0);
     glVertex3f(x, y, z);
     for (int i = 0; i <= 48; ++i)
@@ -148,7 +159,7 @@ void Text(float x, float y, const std::wstring &value, C c = {.94f, .94f, .86f})
 void Panel(float x, float y, float width, float height)
 {
     glColor4f(.075f, .13f, .18f, .93f);
-    glBegin(GL_QUADS);
+    Renderer::CountedBegin(GL_QUADS);
     glVertex2f(x, y);
     glVertex2f(x + width, y);
     glVertex2f(x + width, y + height);
@@ -198,6 +209,7 @@ void Reset()
     moving = false;
     facing = 0;
     last = glutGet(GLUT_ELAPSED_TIME);
+    BuildScene();
 }
 
 bool Blocked(P p)
@@ -413,7 +425,7 @@ void Ground(float x, float z, float sx, float sz, int material)
 {
     renderer->MaterialMode(material);
     Color({1, 1, 1});
-    glBegin(GL_QUADS);
+    Renderer::CountedBegin(GL_QUADS);
     glNormal3f(0, 1, 0);
     float y = material == Renderer::Grass ? -.035f : .025f;
     glTexCoord2f(0, 0);
@@ -432,7 +444,7 @@ void Roof(P b)
 {
     renderer->MaterialMode(Renderer::Roof);
     Color({1, 1, 1});
-    glBegin(GL_QUADS);
+    Renderer::CountedBegin(GL_QUADS);
     glNormal3f(-.70f, .71f, 0);
     glTexCoord2f(0, 0);
     glVertex3f(b.x - 1.85f, 1.85f, b.z - 1.65f);
@@ -454,7 +466,7 @@ void Roof(P b)
     glEnd();
     renderer->MaterialMode();
     Color({.85f, .73f, .54f});
-    glBegin(GL_TRIANGLES);
+    Renderer::CountedBegin(GL_TRIANGLES);
     glNormal3f(0, 0, 1);
     glVertex3f(b.x - 1.5f, 1.8f, b.z + 1.3f);
     glVertex3f(b.x + 1.5f, 1.8f, b.z + 1.3f);
@@ -470,7 +482,7 @@ void WoodenDoor(P b)
 {
     renderer->MaterialMode(Renderer::Wood);
     Color({1, 1, 1});
-    glBegin(GL_QUADS);
+    Renderer::CountedBegin(GL_QUADS);
     glNormal3f(0, 0, 1);
     glTexCoord2f(0, 0);
     glVertex3f(b.x - .32f, .03f, b.z + 1.40f);
@@ -489,7 +501,6 @@ void Person(float x, float z, C coat, bool student = false)
     float cycle = student ? (moving ? walk : 0) : std::sin(time + x) * .15f;
     glPushMatrix();
     glTranslatef(x, 0, z);
-    glRotatef(student ? facing : float(int(x * 9) % 70), 0, 1, 0);
     for (int side = -1; side <= 1; side += 2)
     {
         glPushMatrix();
@@ -594,76 +605,34 @@ void Wildlife(const Animal &a)
     glPopMatrix();
 }
 
-void OpaqueWorld()
+void DrawHouse()
 {
-    for (P b : houses)
+    const P b = {0, 0};
+    Box(b.x, .9f, b.z, 3, 1.8f, 2.6f, {.94f, .84f, .65f});
+    Roof(b);
+    for (int side = -1; side <= 1; side += 2)
     {
-        Box(b.x, .9f, b.z, 3, 1.8f, 2.6f, {.94f, .84f, .65f});
-        Roof(b);
-        for (int side = -1; side <= 1; side += 2)
-        {
-            Box(b.x + side * 1.43f, .93f, b.z + 1.34f, .13f, 1.86f, .12f, {.31f, .21f, .14f});
-            Box(b.x + side * .87f, 1.1f, b.z + 1.34f, .61f, .68f, .08f, {.31f, .21f, .14f});
-            renderer->MaterialMode(-1, .8f);
-            Box(b.x + side * .87f, 1.1f, b.z + 1.39f, .46f, .53f, .025f, {1, .69f, .26f});
-            renderer->MaterialMode();
-            Box(b.x + side * .87f, 1.1f, b.z + 1.42f, .05f, .55f, .03f, {.33f, .22f, .14f});
-        }
-        Box(b.x, 1.76f, b.z + 1.36f, 3, .12f, .13f, {.31f, .21f, .14f});
-        Box(b.x, .59f, b.z + 1.34f, .68f, 1.18f, .09f, {.39f, .25f, .13f});
-        WoodenDoor(b);
-        Ball(b.x + .22f, .62f, b.z + 1.42f, .045f, {.88f, .66f, .25f});
-        Box(b.x, 0, b.z + 1.6f, 1.1f, .16f, .7f, {.53f, .53f, .45f});
-        Box(b.x + 1, 2.6f, b.z - .5f, .42f, 1.5f, .45f, {.55f, .48f, .40f});
+        Box(b.x + side * 1.43f, .93f, b.z + 1.34f, .13f, 1.86f, .12f, {.31f, .21f, .14f});
+        Box(b.x + side * .87f, 1.1f, b.z + 1.34f, .61f, .68f, .08f, {.31f, .21f, .14f});
+        renderer->MaterialMode(-1, .8f);
+        Box(b.x + side * .87f, 1.1f, b.z + 1.39f, .46f, .53f, .025f, {1, .69f, .26f});
+        renderer->MaterialMode();
+        Box(b.x + side * .87f, 1.1f, b.z + 1.42f, .05f, .55f, .03f, {.33f, .22f, .14f});
     }
-    for (P t : trees)
-    {
-        Box(t.x, 1, t.z, .37f, 2, .37f, {.36f, .25f, .13f});
-        Cone(t.x, 1, t.z, 1.13f, 2.2f, {.23f, .44f, .28f});
-        Cone(t.x, 2.1f, t.z, .87f, 1.9f, {.34f, .56f, .31f});
-    }
-    for (const NPC &n : villagers)
-        Person(n.x, n.z, n.color);
-    for (const Animal &a : animals)
-        Wildlife(a);
-    for (P f : campfires)
-    {
-        for (int i = 0; i < 8; ++i)
-        {
-            float a = i * 6.2831853f / 8;
-            Ball(
-                f.x + std::cos(a) * .47f, .15f, f.z + std::sin(a) * .47f, .17f, {.43f, .43f, .40f});
-        }
-        Box(f.x, .14f, f.z, .7f, .14f, .17f, {.25f, .16f, .10f});
-        Box(f.x, .2f, f.z, .16f, .14f, .7f, {.25f, .16f, .10f});
-    }
-    // Timber dock ends above the near shoreline; it is decorative, not a bridge.
-    renderer->MaterialMode();
-    for (int i = 0; i < 6; ++i)
-        Box(5.1f + i * .24f, .12f, -1.8f, .22f, .12f, 1.2f, {.50f, .34f, .18f});
-    Box(stone.x, .38f, stone.z, .75f, .76f, .65f, {.57f, .64f, .63f});
-    renderer->MaterialMode(-1, stage >= 3 ? 1.5f : 0);
-    Ball(stone.x, .88f, stone.z, .18f, stage >= 3 ? C{.61f, .95f, .96f} : C{.54f, .48f, .74f});
-    if (stage <= 1)
-    {
-        renderer->MaterialMode(-1, 1.6f);
-        Ball(seed.x, .6f + std::sin(time * 3) * .12f, seed.z, .25f, {1, .83f, .35f});
-    }
-    renderer->MaterialMode();
-    if (stage == 3)
-        Creature(stone.x - .7f, stone.z);
-    if (stage >= 4)
-        Creature(player.x - .65f, player.z + .5f);
-    Person(player.x, player.z, {.43f, .34f, .72f}, true);
+    Box(b.x, 1.76f, b.z + 1.36f, 3, .12f, .13f, {.31f, .21f, .14f});
+    Box(b.x, .59f, b.z + 1.34f, .68f, 1.18f, .09f, {.39f, .25f, .13f});
+    WoodenDoor(b);
+    Ball(b.x + .22f, .62f, b.z + 1.42f, .045f, {.88f, .66f, .25f});
+    Box(b.x, 0, b.z + 1.6f, 1.1f, .16f, .7f, {.53f, .53f, .45f});
+    Box(b.x + 1, 2.6f, b.z - .5f, .42f, 1.5f, .45f, {.55f, .48f, .40f});
 }
 
-void Landscape()
+void DrawRoads()
 {
-    Ground(0, 0, 58, 54, Renderer::Grass);
     // One non-overlapping road mesh avoids flicker at the intersections.
     renderer->MaterialMode(Renderer::Stone);
     Color({1, 1, 1});
-    glBegin(GL_QUADS);
+    Renderer::CountedBegin(GL_QUADS);
     glNormal3f(0, 1, 0);
     for (int ix = -56; ix < 56; ++ix)
         for (int iz = -52; iz < 52; ++iz)
@@ -689,26 +658,16 @@ void Landscape()
         }
     glEnd();
     renderer->MaterialMode();
-    Disk(9, .035f, -4, 4.6f, 4.2f, {.77f, .72f, .50f});
-    for (int i = 0; i < 180; ++i)
-    {
-        float x = float((i * 17) % 550) / 10 - 27.5f, z = float((i * 31) % 510) / 10 - 25.5f;
-        if (std::fabs(x) > 2 && !Blocked({x, z}))
-        {
-            Cone(x, .03f, z, .09f, .3f, {.37f, .53f, .25f});
-            Ball(x, .3f, z, .06f, i % 2 ? C{1, .84f, .48f} : C{.79f, .61f, .85f});
-        }
-    }
 }
 
-void Effects()
+void DrawWater()
 {
     // Animated water surface with geometric ripples, changing normals and foam.
     renderer->MaterialMode(-1, .18f);
     const int rings = 18, segments = 64;
     auto waterVertex = [](float radius, float angle)
     {
-        float x = 9 + std::cos(angle) * radius * 4.25f, z = -4 + std::sin(angle) * radius * 3.85f;
+        float x = 0 + std::cos(angle) * radius * 4.25f, z = 0 + std::sin(angle) * radius * 3.85f;
         float wave = std::sin(x * 2 + time * 1.4f) * std::cos(z * 2.3f + time) * .025f;
         glNormal3f(-.05f * std::cos(x * 2 + time * 1.4f), 1, -.05f * std::sin(z * 2.3f + time));
         Color({.15f + radius * .12f, .43f + radius * .16f + wave, .58f + radius * .13f});
@@ -716,7 +675,7 @@ void Effects()
     };
     for (int ring = 0; ring < rings; ++ring)
     {
-        glBegin(GL_TRIANGLE_STRIP);
+        Renderer::CountedBegin(GL_TRIANGLE_STRIP);
         for (int j = 0; j <= segments; ++j)
         {
             float a = j * 6.2831853f / segments;
@@ -729,69 +688,353 @@ void Effects()
     for (int i = 0; i < 30; ++i)
     {
         float a = i * 2.4f + time * .07f, r = 1.2f + (i % 6) * .44f;
-        Disk(9 + std::cos(a) * r, .115f, -4 + std::sin(a) * r, .11f, .025f, {.61f, .86f, .86f});
+        Disk(0 + std::cos(a) * r, .115f, 0 + std::sin(a) * r, .11f, .025f, {.61f, .86f, .86f});
     }
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE);
-    glDepthMask(GL_FALSE);
-    // Flame ribbons and rising embers. Emissive values feed the bloom pass.
+}
+
+void DrawFire()
+{
+    const P f = {0, 0};
+    renderer->MaterialMode(-1, 2.1f);
+    for (int i = 0; i < 9; ++i)
+    {
+        float life = std::fmod(time * (.65f + i * .015f) + i * .113f, 1.f);
+        float x = f.x + std::sin(time * 4 + i) * .12f, z = f.z + std::cos(time * 3 + i) * .12f;
+        Ball(x, .25f + life * .95f, z, (1 - life) * .16f + .015f, {1, .28f + life * .3f, .055f});
+    }
+    for (int i = 0; i < 7; ++i)
+    {
+        float life = std::fmod(time * .4f + i * .14f, 1.f);
+        Ball(f.x + std::sin(i + time) * life * .45f,
+             .6f + life * 1.8f,
+             f.z,
+             .025f * (1 - life),
+             {1, .64f, .12f});
+    }
+}
+
+void HUD();
+
+ActorTransform Placement(P p, float y = 0, float heading = 0)
+{
+    return {{p.x, y, p.z}, {0, heading, 0}, {1, 1, 1}};
+}
+
+Actor &Place(const wchar_t *name,
+             ActorId parent,
+             const ActorTransform &transform,
+             ActorBounds bounds,
+             std::function<void()> draw,
+             bool shadow = true,
+             bool additive = false)
+{
+    Actor &actor = scene.Create(name, parent);
+    actor.SetTransform(transform);
+    actor.SetBounds(bounds);
+    actor.SetDraw(std::move(draw));
+    actor.SetPasses(true, shadow);
+    ActorAppearance look;
+    look.additive = additive;
+    actor.SetAppearance(look);
+    return actor;
+}
+
+void BuildScene()
+{
+    scene.Clear();
+    animalActors.clear();
+    breadcrumbActors.clear();
+    const ActorId level = scene.Create(L"튜토리얼").Id();
+    const ActorId terrain = scene.Create(L"지형", level).Id();
+    const ActorId dynamic = scene.Create(L"주민과 생물", level).Id();
+    std::map<std::pair<int, int>, ActorId> chunks;
+    auto chunkFor = [&](P p)
+    {
+        const std::pair<int, int> key = {int(std::floor(p.x / 8)), int(std::floor(p.z / 8))};
+        auto found = chunks.find(key);
+        if (found != chunks.end())
+            return found->second;
+        Actor &chunk = scene.Create(L"정적 구역", terrain);
+        // Local meshes are placed under named spatial groups for subtree culling.
+        chunks.emplace(key, chunk.Id());
+        return chunk.Id();
+    };
+    Place(
+        L"지면",
+        terrain,
+        Placement({0, 0}),
+        ActorBounds::Box({-29, -.05f, -27}, {29, 0, 27}),
+        []
+        {
+            Ground(0, 0, 58, 54, Renderer::Grass);
+        },
+        false);
+    Place(
+        L"돌길",
+        terrain,
+        Placement({0, 0}),
+        ActorBounds::Box({-13, 0, -7}, {13, .04f, 22}),
+        []
+        {
+            DrawRoads();
+        },
+        false);
+    for (P b : houses)
+        Place(L"주택",
+              chunkFor(b),
+              Placement(b),
+              ActorBounds::Box({-1.9f, -.1f, -1.7f}, {1.9f, 3.65f, 2}),
+              []
+              {
+                  DrawHouse();
+              });
+    for (P t : trees)
+        Place(L"나무",
+              chunkFor(t),
+              Placement(t),
+              ActorBounds::Box({-1.2f, 0, -1.2f}, {1.2f, 4.1f, 1.2f}),
+              []
+              {
+                  Box(0, 1, 0, .37f, 2, .37f, {.36f, .25f, .13f});
+                  Cone(0, 1, 0, 1.13f, 2.2f, {.23f, .44f, .28f});
+                  Cone(0, 2.1f, 0, .87f, 1.9f, {.34f, .56f, .31f});
+              });
+    for (int i = 0; i < 180; ++i)
+    {
+        const P p = {float((i * 17) % 550) / 10 - 27.5f, float((i * 31) % 510) / 10 - 25.5f};
+        if (std::fabs(p.x) > 2 && !Blocked(p))
+            Place(
+                L"야생화",
+                chunkFor(p),
+                Placement(p),
+                ActorBounds::Box({-.1f, 0, -.1f}, {.1f, .4f, .1f}),
+                [i]
+                {
+                    Cone(0, .03f, 0, .09f, .3f, {.37f, .53f, .25f});
+                    Ball(0, .3f, 0, .06f, i % 2 ? C{1, .84f, .48f} : C{.79f, .61f, .85f});
+                },
+                false);
+    }
+    for (int i = 0; i < npcCount; ++i)
+    {
+        const NPC &n = villagers[i];
+        Place(n.name,
+              dynamic,
+              Placement({n.x, n.z}, 0, float(int(n.x * 9) % 70)),
+              ActorBounds::Box({-.65f, 0, -.65f}, {.65f, 2.3f, .65f}),
+              [i]
+              {
+                  Person(0, 0, villagers[i].color);
+              });
+    }
+    heroActor = Place(L"플레이어",
+                      dynamic,
+                      Placement(player),
+                      ActorBounds::Box({-.7f, 0, -.7f}, {.7f, 2.3f, .7f}),
+                      []
+                      {
+                          Person(0, 0, {.43f, .34f, .72f}, true);
+                      })
+                    .Id();
+    for (std::size_t i = 0; i < animals.size(); ++i)
+        animalActors.push_back(Place(L"야생동물",
+                                     dynamic,
+                                     Placement(animals[i].position),
+                                     ActorBounds::Box({-.8f, 0, -1.4f}, {.8f, 1.7f, 1.4f}),
+                                     [i]
+                                     {
+                                         Animal local = animals[i];
+                                         local.position = {0, 0};
+                                         local.heading = 0;
+                                         Wildlife(local);
+                                     })
+                                   .Id());
+
     for (P f : campfires)
     {
-        renderer->MaterialMode(-1, 2.1f);
-        for (int i = 0; i < 9; ++i)
-        {
-            float life = std::fmod(time * (.65f + i * .015f) + i * .113f, 1.f);
-            float x = f.x + std::sin(time * 4 + i) * .12f, z = f.z + std::cos(time * 3 + i) * .12f;
-            Ball(
-                x, .25f + life * .95f, z, (1 - life) * .16f + .015f, {1, .28f + life * .3f, .055f});
-        }
-        for (int i = 0; i < 7; ++i)
-        {
-            float life = std::fmod(time * .4f + i * .14f, 1.f);
-            Ball(f.x + std::sin(i + time) * life * .45f,
-                 .6f + life * 1.8f,
-                 f.z,
-                 .025f * (1 - life),
-                 {1, .64f, .12f});
-        }
+        Actor &camp = scene.Create(L"모닥불", terrain);
+        camp.SetTransform(Placement(f));
+        Place(L"장작과 돌",
+              camp.Id(),
+              Placement({0, 0}),
+              ActorBounds::Box({-.7f, 0, -.7f}, {.7f, .4f, .7f}),
+              []
+              {
+                  for (int i = 0; i < 8; ++i)
+                  {
+                      const float a = i * 6.2831853f / 8;
+                      Ball(std::cos(a) * .47f, .15f, std::sin(a) * .47f, .17f, {.43f, .43f, .40f});
+                  }
+                  Box(0, .14f, 0, .7f, .14f, .17f, {.25f, .16f, .10f});
+                  Box(0, .2f, 0, .16f, .14f, .7f, {.25f, .16f, .10f});
+              });
+        Place(
+            L"불꽃과 불티",
+            camp.Id(),
+            Placement({0, 0}),
+            ActorBounds::Box({-.7f, 0, -.4f}, {.7f, 2.5f, .4f}),
+            []
+            {
+                DrawFire();
+            },
+            false,
+            true);
     }
-    if (stage < 5)
+    Actor &lake = scene.Create(L"호수", terrain);
+    lake.SetTransform(Placement({9, -4}));
+    Place(
+        L"호숫가 모래",
+        lake.Id(),
+        Placement({0, 0}),
+        ActorBounds::Box({-4.6f, 0, -4.2f}, {4.6f, .05f, 4.2f}),
+        []
+        {
+            Disk(0, .035f, 0, 4.6f, 4.2f, {.77f, .72f, .50f});
+        },
+        false);
+    Place(
+        L"수면과 물결",
+        lake.Id(),
+        Placement({0, 0}),
+        ActorBounds::Box({-4.3f, .04f, -3.9f}, {4.3f, .15f, 3.9f}),
+        []
+        {
+            DrawWater();
+        },
+        false);
+    Place(L"목재 선착장",
+          terrain,
+          Placement({5.1f, -1.8f}),
+          ActorBounds::Box({-.12f, 0, -.6f}, {1.4f, .2f, .6f}),
+          []
+          {
+              for (int i = 0; i < 6; ++i)
+                  Box(i * .24f, .12f, 0, .22f, .12f, 1.2f, {.5f, .34f, .18f});
+          });
+    Place(L"고대 문양석",
+          terrain,
+          Placement(stone),
+          ActorBounds::Box({-.4f, 0, -.4f}, {.4f, 1.1f, .4f}),
+          []
+          {
+              Box(0, .38f, 0, .75f, .76f, .65f, {.57f, .64f, .63f});
+              renderer->MaterialMode(-1, stage >= 3 ? 1.5f : 0);
+              Ball(0, .88f, 0, .18f, stage >= 3 ? C{.61f, .95f, .96f} : C{.54f, .48f, .74f});
+          });
+    Actor &seedNode = Place(L"빛씨앗",
+                            dynamic,
+                            Placement(seed),
+                            ActorBounds::Box({-.25f, -.25f, -.25f}, {.25f, .25f, .25f}),
+                            []
+                            {
+                                Ball(0, 0, 0, .25f, {1, .83f, .35f});
+                            });
+    ActorAppearance glow;
+    glow.emission = 1.6f;
+    seedNode.SetAppearance(glow);
+    seedActor = seedNode.Id();
+    creatureActor = Place(L"작은 생물",
+                          dynamic,
+                          Placement({0, 0}),
+                          ActorBounds::Box({-.8f, 0, -.6f}, {.8f, 1, .6f}),
+                          []
+                          {
+                              Creature(0, 0);
+                          })
+                        .Id();
+    Actor &marker = Place(
+        L"목적지 표시",
+        dynamic,
+        Placement({0, 0}),
+        ActorBounds::Box({-.13f, -.13f, -.13f}, {.13f, .13f, .13f}),
+        []
+        {
+            Ball(0, 0, 0, .12f, {1, .85f, .3f});
+        },
+        false,
+        true);
+    targetActor = marker.Id();
+    glow.additive = true;
+    glow.emission = 1.4f;
+    marker.SetAppearance(glow);
+    for (int i = 0; i < 6; ++i)
     {
-        P t = Target();
-        renderer->MaterialMode(-1, 1.4f);
-        Ball(t.x, 2.4f + std::sin(time * 3) * .12f, t.z, .12f, {1, .85f, .30f});
-        for (int i = 1; i <= 6 && Dist(player, t) > 2; ++i)
-        {
-            float f = float(i) / 7;
-            Disk(player.x + (t.x - player.x) * f,
-                 .10f,
-                 player.z + (t.z - player.z) * f,
-                 .065f,
-                 .065f,
-                 {1, .8f, .37f});
-        }
+        Actor &dot = Place(
+            L"길 안내",
+            dynamic,
+            Placement({0, 0}),
+            ActorBounds::Box({-.07f, -.01f, -.07f}, {.07f, .01f, .07f}),
+            []
+            {
+                Disk(0, 0, 0, .065f, .065f, {1, .8f, .37f});
+            },
+            false,
+            true);
+        dot.SetAppearance(glow);
+        breadcrumbActors.push_back(dot.Id());
     }
-    if (spell > 0)
+    Actor &magic = Place(
+        L"빛 마법",
+        dynamic,
+        Placement(player),
+        ActorBounds::Box({-2.6f, 0, -2.6f}, {2.6f, 1.5f, 2.6f}),
+        []
+        {
+            for (int i = 0; i < 36; ++i)
+            {
+                const float a = i * 6.2831853f / 36, r = (1 - spell) * 2.5f;
+                Ball(std::cos(a) * r, .35f + spell, std::sin(a) * r, .055f, {1, .8f, .4f});
+            }
+        },
+        false,
+        true);
+    glow.emission = 2.3f;
+    magic.SetAppearance(glow);
+    spellActor = magic.Id();
+    Actor &hud = scene.Create(L"튜토리얼 HUD");
+    hud.SetPasses(false, false, true);
+    hud.SetBounds(ActorBounds::Box({0, 0, -.01f}, {1280, 800, .01f}));
+    hud.SetDraw(
+        []
+        {
+            HUD();
+        });
+    SyncScene();
+}
+
+void SyncScene()
+{
+    scene.Find(heroActor)->SetTransform(Placement(player, 0, facing));
+    for (std::size_t i = 0; i < animals.size(); ++i)
+        scene.Find(animalActors[i])
+            ->SetTransform(Placement(animals[i].position, 0, animals[i].heading));
+    Actor *seedNode = scene.Find(seedActor);
+    seedNode->SetTransform(Placement(seed, .6f + std::sin(time * 3) * .12f));
+    seedNode->SetEnabled(stage <= 1);
+    Actor *creature = scene.Find(creatureActor);
+    creature->SetEnabled(stage >= 3);
+    creature->SetTransform(
+        Placement(stage == 3 ? P{stone.x - .7f, stone.z} : P{player.x - .65f, player.z + .5f}));
+    const P target = Target();
+    Actor *marker = scene.Find(targetActor);
+    marker->SetEnabled(stage < 5);
+    marker->SetTransform(Placement(target, 2.4f + std::sin(time * 3) * .12f));
+    for (std::size_t i = 0; i < breadcrumbActors.size(); ++i)
     {
-        renderer->MaterialMode(-1, 2.3f);
-        for (int i = 0; i < 36; ++i)
-        {
-            float a = i * 6.2831853f / 36, r = (1 - spell) * 2.5f;
-            Ball(player.x + std::cos(a) * r,
-                 .35f + spell,
-                 player.z + std::sin(a) * r,
-                 .055f,
-                 {1, .8f, .4f});
-        }
+        const float fraction = float(i + 1) / 7;
+        Actor *dot = scene.Find(breadcrumbActors[i]);
+        dot->SetEnabled(stage < 5 && Dist(player, target) > 2);
+        dot->SetTransform(Placement({player.x + (target.x - player.x) * fraction,
+                                     player.z + (target.z - player.z) * fraction},
+                                    .1f));
     }
-    glDepthMask(GL_TRUE);
-    glDisable(GL_BLEND);
-    renderer->MaterialMode();
+    scene.Find(spellActor)->SetEnabled(spell > 0);
+    scene.Find(spellActor)->SetTransform(Placement(player));
+    scene.UpdateTransforms();
 }
 
 void HUD()
 {
-    renderer->BeginUI();
     Panel(24, 22, 775, 116);
     Text(44, 52, L"윌로미어 · 작은 시작", {1, .86f, .55f});
     Text(44, 86, Objective());
@@ -810,7 +1053,7 @@ void HUD()
     {
         Color(c);
         glPointSize(6);
-        glBegin(GL_POINTS);
+        Renderer::CountedBegin(GL_POINTS);
         glVertex2f(1147 + p.x * 3.3f, 131 + p.z * 2.2f);
         glEnd();
     };
@@ -864,6 +1107,7 @@ bool Initialize(int width, int height)
 
 void Shutdown()
 {
+    scene.Clear();
     renderer.reset();
 }
 
@@ -871,14 +1115,16 @@ void Render()
 {
     if (!renderer || !renderer->IsInitialized())
         return;
+    Renderer::BeginFrame();
+    SyncScene();
     renderer->BeginShadow(camera.x, camera.z);
-    OpaqueWorld();
+    scene.Draw(*renderer, ScenePass::Shadow, time);
     renderer->BeginScene(camera.x, camera.z);
-    Landscape();
-    OpaqueWorld();
-    Effects();
+    scene.Draw(*renderer, ScenePass::World, time);
     renderer->EndScene();
-    HUD();
+    renderer->BeginUI();
+    scene.Draw(*renderer, ScenePass::UI, time);
     glutSwapBuffers();
+    Renderer::EndFrame();
 }
 }

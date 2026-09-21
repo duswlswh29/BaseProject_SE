@@ -59,6 +59,12 @@ bool ModelCache::Initialize()
     for (Mesh &mesh : meshes)
     {
         mesh.count = static_cast<GLsizei>(mesh.vertices.size());
+        mesh.bounds = {};
+        for (const Vertex &vertex : mesh.vertices)
+        {
+            mesh.bounds.Include(
+                Vector3{vertex.position[0], vertex.position[1], vertex.position[2]});
+        }
         glGenBuffers(1, &mesh.buffer);
         glBindBuffer(GL_ARRAY_BUFFER, mesh.buffer);
         glBufferData(GL_ARRAY_BUFFER,
@@ -156,7 +162,7 @@ void ModelCache::Draw(Model model) const
     glNormalPointer(GL_FLOAT, sizeof(Vertex), reinterpret_cast<void *>(offsetof(Vertex, normal)));
     glColorPointer(4, GL_FLOAT, sizeof(Vertex), reinterpret_cast<void *>(offsetof(Vertex, color)));
     glTexCoordPointer(2, GL_FLOAT, sizeof(Vertex), reinterpret_cast<void *>(offsetof(Vertex, uv)));
-    glDrawArrays(GL_TRIANGLES, 0, mesh.count);
+    Renderer::CountedDrawArrays(GL_TRIANGLES, 0, mesh.count);
     glDisableClientState(GL_TEXTURE_COORD_ARRAY);
     glDisableClientState(GL_COLOR_ARRAY);
     glDisableClientState(GL_NORMAL_ARRAY);
@@ -167,6 +173,11 @@ void ModelCache::Draw(Model model) const
 const std::wstring &ModelCache::Status() const
 {
     return status;
+}
+
+const ActorBounds &ModelCache::Bounds(Model model) const
+{
+    return meshes[static_cast<std::size_t>(model)].bounds;
 }
 
 void ModelCache::Box(

@@ -37,6 +37,12 @@ class Renderer
     }
 
     void Resize(int width, int height);
+    // Direct API submissions; FreeGLUT shape calls are reported separately.
+    static void BeginFrame();
+    static void EndFrame();
+    static void CountedBegin(GLenum mode);
+    static void CountedDrawArrays(GLenum mode, GLint first, GLsizei count);
+    static void CountToolkitShape();
     void BeginShadow(float cameraX, float cameraZ);
     void BeginScene(float cameraX, float cameraZ);
     void MaterialMode(int material = -1, float emission = 0, float textureRepeat = 1);

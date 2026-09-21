@@ -2,6 +2,7 @@
 #include "LevelOne.h"
 #include "ModelCache.h"
 #include "RpgWorld.h"
+#include "SceneGraph.h"
 #include "Dependencies/freeglut.h"
 #include <algorithm>
 #include <chrono>
@@ -27,6 +28,7 @@ struct Enemy
     float cooldown = 0;
     float respawn = 0;
     float hitFlash = 0;
+    ActorId actor = 0;
 };
 
 struct Projectile
@@ -35,12 +37,14 @@ struct Projectile
     Point direction;
     float life = 1;
     int damage = 0;
+    ActorId actor = 0;
 };
 
 struct Loot
 {
     Point position;
     int kind = 0;
+    ActorId actor = 0;
 };
 
 struct FloatingText
@@ -52,6 +56,11 @@ struct FloatingText
 
 std::unique_ptr<Renderer> renderer;
 std::unique_ptr<ModelCache> models;
+SceneGraph scene;
+ActorId dynamicRoot = 0;
+ActorId heroActor = 0;
+void BuildScene();
+void SyncScene();
 Rpg::World world;
 Rpg::Stats stats;
 std::mt19937 random;
@@ -200,6 +209,7 @@ void NewMap()
     attackCooldown = 0;
     invulnerable = 2;
     confirmNewMap = false;
+    BuildScene();
 }
 
 void Move(Point &position, Point direction, float speed, float dt)
@@ -426,138 +436,204 @@ void UpdateEnemies(float dt)
     }
 }
 
-void DrawModel(Model model,
-               Point position,
-               float y = 0,
-               float heading = 0,
-               float sx = 1,
-               float sy = 1,
-               float sz = 1)
+void HUD();
+
+ActorTransform Placement(
+    Point p, float y = 0, float heading = 0, float sx = 1, float sy = 1, float sz = 1)
 {
-    glPushMatrix();
-    glTranslatef(position.x, y, position.z);
-    glRotatef(heading, 0, 1, 0);
-    glScalef(sx, sy, sz);
-    models->Draw(model);
-    glPopMatrix();
+    return {{p.x, y, p.z}, {0, heading, 0}, {sx, sy, sz}};
 }
 
-bool Visible(Point position)
+Actor &AddModel(const std::wstring &name,
+                Model model,
+                ActorId parent,
+                const ActorTransform &transform,
+                bool castsShadow = true)
 {
-    return std::fabs(position.x - camera.x) < 28 && std::fabs(position.z - camera.z) < 28;
-}
-
-void Actors()
-{
-    for (int z = 0; z < Rpg::World::Size; ++z)
+    Actor &actor = scene.Create(name, parent);
+    actor.SetTransform(transform);
+    ActorBounds bounds = models->Bounds(model);
+    if (model == Model::Water)
     {
-        for (int x = 0; x < Rpg::World::Size; ++x)
+        bounds.minimum.y -= .05f;
+        bounds.maximum.y += .05f;
+    }
+    if (model == Model::Flame)
+    {
+        bounds.minimum.x -= .2f;
+        bounds.maximum.x += .2f;
+    }
+    actor.SetBounds(bounds);
+    actor.SetPasses(true, castsShadow);
+    ActorAppearance appearance;
+    appearance.meshKey = static_cast<std::uint32_t>(model);
+    actor.SetAppearance(appearance);
+    actor.SetDraw(
+        [model]
         {
-            const Point position = world.Center(x, z);
-            if (!Visible(position))
+            models->Draw(model);
+        });
+    return actor;
+}
+
+void BuildScene()
+{
+    scene.Clear();
+    const ActorId level = scene.Create(L"레벨 1").Id();
+    const ActorId terrain = scene.Create(L"정적 지형 청크", level).Id();
+    dynamicRoot = scene.Create(L"동적 오브젝트", level).Id();
+    const ActorId overlay = scene.Create(L"화면 UI").Id();
+
+    Actor &ground = AddModel(L"잔디 지면",
+                             Model::Ground,
+                             terrain,
+                             Placement({-.75f, -.75f}, -.06f, 0, 60, 1, 60),
+                             false);
+    ActorAppearance grass;
+    grass.material = Renderer::Grass;
+    grass.textureRepeat = 30;
+    ground.SetAppearance(grass);
+
+    // Local chunk transforms let a rejected subtree skip all contained props.
+    constexpr int ChunkCells = 8;
+    for (int cz = 0; cz < Rpg::World::Size; cz += ChunkCells)
+    {
+        for (int cx = 0; cx < Rpg::World::Size; cx += ChunkCells)
+        {
+            const Point origin = world.Center(cx, cz);
+            Actor &chunk = scene.Create(L"지형 구역", terrain);
+            chunk.SetTransform(Placement(origin));
+            for (int z = cz; z < (std::min)(cz + ChunkCells, Rpg::World::Size); ++z)
             {
-                continue;
-            }
-            if (world.At(x, z) == Rpg::Tile::Tree)
-            {
-                DrawModel(Model::Tree, position);
-            }
-            else if (world.At(x, z) == Rpg::Tile::Rock)
-            {
-                DrawModel(Model::Rock, position);
+                for (int x = cx; x < (std::min)(cx + ChunkCells, Rpg::World::Size); ++x)
+                {
+                    const Rpg::Tile tile = world.At(x, z);
+                    if (tile == Rpg::Tile::Ground)
+                        continue;
+                    const Point worldPoint = world.Center(x, z);
+                    const Point local = {worldPoint.x - origin.x, worldPoint.z - origin.z};
+                    const Model model =
+                        tile == Rpg::Tile::Tree
+                            ? Model::Tree
+                            : (tile == Rpg::Tile::Rock ? Model::Rock : Model::Water);
+                    Actor &object = AddModel(tile == Rpg::Tile::Water ? L"수면" : L"지형 물체",
+                                             model,
+                                             chunk.Id(),
+                                             tile == Rpg::Tile::Water
+                                                 ? Placement(local, .025f, 0, 1.5f, 1, 1.5f)
+                                                 : Placement(local),
+                                             tile != Rpg::Tile::Water);
+                    if (tile == Rpg::Tile::Water)
+                    {
+                        ActorAppearance look = object.Appearance();
+                        look.effect = 1;
+                        object.SetAppearance(look);
+                    }
+                }
             }
         }
     }
-    DrawModel(Model::Camp, {0, 0});
-    const int frame = moving ? static_cast<int>(walkTime * 10) % 8 : 0;
-    renderer->MaterialMode(-1, invulnerable > 0 ? .35f : 0);
-    DrawModel(static_cast<Model>(frame), player, 0, facing);
-    renderer->MaterialMode();
-    for (const Enemy &enemy : enemies)
-    {
-        if (enemy.health <= 0 || !Visible(enemy.position))
+    Actor &camp = scene.Create(L"야영지", level);
+    Actor &paving = AddModel(
+        L"야영지 바닥", Model::Ground, camp.Id(), Placement({0, 0}, -.03f, 0, 5, 1, 5), false);
+    ActorAppearance stoneLook;
+    stoneLook.material = Renderer::Stone;
+    paving.SetAppearance(stoneLook);
+    AddModel(L"장작", Model::Camp, camp.Id(), Placement({0, 0}));
+    Actor &fire = AddModel(
+        L"모닥불 불꽃", Model::Flame, camp.Id(), Placement({0, 0}, .18f, -45, .9f, 1.4f, 1), false);
+    ActorAppearance fireLook;
+    fireLook.effect = 2;
+    fireLook.additive = true;
+    fire.SetAppearance(fireLook);
+
+    Actor &hero = AddModel(L"플레이어", Model::Hero0, dynamicRoot, Placement(player));
+    ActorBounds animationBounds;
+    for (int frame = 0; frame < 8; ++frame)
+        animationBounds.Include(models->Bounds(static_cast<Model>(frame)));
+    hero.SetBounds(animationBounds);
+    hero.SetDraw(
+        []
         {
-            continue;
+            const int frame = moving ? static_cast<int>(walkTime * 10) % 8 : 0;
+            models->Draw(static_cast<Model>(frame));
+        });
+    heroActor = hero.Id();
+
+    Actor &hud = scene.Create(L"HUD와 가방", overlay);
+    hud.SetPasses(false, false, true);
+    hud.SetBounds(ActorBounds::Box({0, 0, -.01f}, {1280, 800, .01f}));
+    hud.SetDraw(
+        []
+        {
+            HUD();
+        });
+    SyncScene();
+}
+
+void SyncScene()
+{
+    std::unordered_set<ActorId> keep;
+    auto sync = [&](ActorId &id,
+                    Model model,
+                    const wchar_t *name,
+                    const ActorTransform &transform,
+                    float emission,
+                    bool active,
+                    bool shadow)
+    {
+        Actor *actor = id ? scene.Find(id) : nullptr;
+        if (!actor)
+        {
+            actor = &AddModel(name, model, dynamicRoot, transform, shadow);
+            id = actor->Id();
         }
-        renderer->MaterialMode(-1, enemy.hitFlash > 0 ? 1.f : 0);
-        // Transform only: the model vertices themselves stay cached.
+        actor->SetTransform(transform);
+        actor->SetEnabled(active);
+        ActorAppearance look = actor->Appearance();
+        look.emission = emission;
+        actor->SetAppearance(look);
+        keep.insert(id);
+    };
+    if (Actor *hero = scene.Find(heroActor))
+    {
+        hero->SetTransform(Placement(player, 0, facing));
+        ActorAppearance look = hero->Appearance();
+        look.emission = invulnerable > 0 ? .35f : 0;
+        hero->SetAppearance(look);
+        keep.insert(heroActor);
+    }
+    for (Enemy &enemy : enemies)
+    {
         const float squash = enemy.kind == 0 ? 1 + std::sin(time * 5) * .08f : 1;
-        DrawModel(enemy.kind == 0 ? Model::Slime : Model::Boar,
-                  enemy.position,
-                  0,
-                  enemy.heading,
-                  1,
-                  squash,
-                  1);
+        sync(enemy.actor,
+             enemy.kind == 0 ? Model::Slime : Model::Boar,
+             L"적",
+             Placement(enemy.position, 0, enemy.heading, 1, squash, 1),
+             enemy.hitFlash > 0 ? 1.f : 0,
+             enemy.health > 0,
+             true);
     }
-    renderer->MaterialMode();
-}
-
-void TerrainAndEffects()
-{
-    // A repeated material covers the whole map with one cached ground mesh.
-    renderer->MaterialMode(Renderer::Grass, 0, 30);
-    DrawModel(Model::Ground,
-              {-.75f, -.75f},
-              -.06f,
-              0,
-              Rpg::World::Size * Rpg::World::CellSize,
-              1,
-              Rpg::World::Size * Rpg::World::CellSize);
-    renderer->MaterialMode(Renderer::Stone);
-    DrawModel(Model::Ground, {0, 0}, -.03f, 0, 5, 1, 5);
-    renderer->MaterialMode();
-    renderer->EffectMode(1, time);
-    for (int z = 0; z < Rpg::World::Size; ++z)
-    {
-        for (int x = 0; x < Rpg::World::Size; ++x)
-        {
-            const Point position = world.Center(x, z);
-            if (world.At(x, z) == Rpg::Tile::Water && Visible(position))
-            {
-                DrawModel(Model::Water,
-                          position,
-                          .025f,
-                          0,
-                          Rpg::World::CellSize,
-                          1,
-                          Rpg::World::CellSize);
-            }
-        }
-    }
-    renderer->EffectMode();
-    renderer->MaterialMode(-1, .55f);
-    for (const Loot &item : loot)
-    {
-        if (Visible(item.position))
-        {
-            DrawModel(item.kind == 0 ? Model::Crystal : Model::Potion,
-                      item.position,
-                      .12f + std::sin(time * 3) * .05f,
-                      time * 45);
-        }
-    }
-    renderer->MaterialMode(-1, 1.8f);
-    for (const Projectile &shot : projectiles)
-    {
-        DrawModel(Model::Orb, shot.position, .7f);
-    }
-    renderer->MaterialMode();
-    renderer->EffectMode(2, time);
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE);
-    glDepthMask(GL_FALSE);
-    DrawModel(Model::Flame, {0, 0}, .18f, -45, .9f, 1.4f, 1);
-    glDepthMask(GL_TRUE);
-    glDisable(GL_BLEND);
-    renderer->EffectMode();
+    for (Loot &item : loot)
+        sync(item.actor,
+             item.kind == 0 ? Model::Crystal : Model::Potion,
+             L"전리품",
+             Placement(item.position, .12f + std::sin(time * 3) * .05f, time * 45),
+             .55f,
+             true,
+             false);
+    for (Projectile &shot : projectiles)
+        sync(shot.actor, Model::Orb, L"빛탄", Placement(shot.position, .7f), 1.8f, true, false);
+    // Removed gameplay objects lose their scene nodes; IDs remain stable otherwise.
+    scene.RetainChildren(dynamicRoot, keep);
+    scene.UpdateTransforms();
 }
 
 void Panel(
     float x, float y, float width, float height, float r = .075f, float g = .13f, float b = .18f)
 {
     glColor4f(r, g, b, .94f);
-    glBegin(GL_QUADS);
+    Renderer::CountedBegin(GL_QUADS);
     glVertex2f(x, y);
     glVertex2f(x + width, y);
     glVertex2f(x + width, y + height);
@@ -578,7 +654,6 @@ void ScreenPosition(Point position, float &x, float &y)
 
 void HUD()
 {
-    renderer->BeginUI();
     Panel(20, 18, 720, 172);
     renderer->Text(38, 48, L"레벨 1 · 반딧불 사냥터", 1, .86f, .55f);
     renderer->Text(38,
@@ -615,7 +690,7 @@ void HUD()
             glColor3f(tile == Rpg::Tile::Water ? .2f : .35f,
                       tile == Rpg::Tile::Ground ? .55f : .35f,
                       tile == Rpg::Tile::Water ? .75f : .25f);
-            glBegin(GL_POINTS);
+            Renderer::CountedBegin(GL_POINTS);
             glVertex2f(1052 + x * 5, 57 + z * 4.5f);
             glEnd();
         }
@@ -624,7 +699,7 @@ void HUD()
     {
         glColor3f(r, g, b);
         glPointSize(5);
-        glBegin(GL_POINTS);
+        Renderer::CountedBegin(GL_POINTS);
         glVertex2f(1052 + (p.x / Rpg::World::CellSize + 20) * 5,
                    57 + (p.z / Rpg::World::CellSize + 20) * 4.5f);
         glEnd();
@@ -637,7 +712,7 @@ void HUD()
     renderer->Text(1054, 251, L"흰색: 나 / 빨강: 적");
     for (const Enemy &enemy : enemies)
     {
-        if (enemy.health <= 0 || !Visible(enemy.position))
+        if (enemy.health <= 0 || !scene.WasVisible(enemy.actor))
             continue;
         float x = 0, y = 0;
         ScreenPosition(enemy.position, x, y);
@@ -715,6 +790,7 @@ void Shutdown()
     running = false;
     if (!profilePath.empty() && saveDirty)
         SaveProfile();
+    scene.Clear();
     models.reset();
     renderer.reset();
 }
@@ -723,15 +799,17 @@ void Render()
 {
     if (!running || !renderer || !renderer->IsInitialized())
         return;
+    Renderer::BeginFrame();
+    SyncScene();
     renderer->BeginShadow(camera.x, camera.z);
-    Actors();
+    scene.Draw(*renderer, ScenePass::Shadow, time);
     renderer->BeginScene(camera.x, camera.z);
-    renderer->EffectMode();
-    Actors();
-    TerrainAndEffects();
+    scene.Draw(*renderer, ScenePass::World, time);
     renderer->EndScene();
-    HUD();
+    renderer->BeginUI();
+    scene.Draw(*renderer, ScenePass::UI, time);
     glutSwapBuffers();
+    Renderer::EndFrame();
 }
 
 void Resize(int width, int height)

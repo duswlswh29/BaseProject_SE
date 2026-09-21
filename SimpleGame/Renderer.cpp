@@ -4,12 +4,19 @@
 #include <algorithm>
 #include <cmath>
 #include <vector>
+#include <cstdint>
+#include <cstdio>
 
 namespace
 {
+std::uint64_t frameNumber = 0;
+std::uint64_t immediateCalls = 0;
+std::uint64_t arrayCalls = 0;
+std::uint64_t toolkitShapes = 0;
+
 void Quad()
 {
-    glBegin(GL_QUADS);
+    Renderer::CountedBegin(GL_QUADS);
     glTexCoord2f(0, 0);
     glVertex2f(-1, -1);
     glTexCoord2f(1, 0);
@@ -20,6 +27,40 @@ void Quad()
     glVertex2f(-1, 1);
     glEnd();
 }
+}
+
+void Renderer::BeginFrame()
+{
+    ++frameNumber;
+    immediateCalls = arrayCalls = toolkitShapes = 0;
+}
+
+void Renderer::EndFrame()
+{
+    std::printf(
+        "[Frame %llu] Draw calls: %llu (arrays: %llu, immediate: %llu), FreeGLUT shapes: %llu\n",
+        static_cast<unsigned long long>(frameNumber),
+        static_cast<unsigned long long>(immediateCalls + arrayCalls),
+        static_cast<unsigned long long>(arrayCalls),
+        static_cast<unsigned long long>(immediateCalls),
+        static_cast<unsigned long long>(toolkitShapes));
+}
+
+void Renderer::CountedBegin(GLenum mode)
+{
+    ++immediateCalls;
+    glBegin(mode);
+}
+
+void Renderer::CountedDrawArrays(GLenum mode, GLint first, GLsizei count)
+{
+    ++arrayCalls;
+    glDrawArrays(mode, first, count);
+}
+
+void Renderer::CountToolkitShape()
+{
+    ++toolkitShapes;
 }
 
 GLuint Renderer::Compile(const char *vs, const char *fs)
@@ -449,7 +490,7 @@ void Renderer::Text(float x, float baseline, const std::wstring &value, float r,
     glEnable(GL_TEXTURE_2D);
     glBindTexture(GL_TEXTURE_2D, l.texture);
     glColor4f(r, g, b, 1);
-    glBegin(GL_QUADS);
+    Renderer::CountedBegin(GL_QUADS);
     glTexCoord2f(0, 0);
     glVertex2f(x, baseline - 23);
     glTexCoord2f(1, 0);
@@ -466,7 +507,7 @@ void Renderer::DrawSolidRect(
     float x, float y, float z, float size, float r, float g, float b, float a)
 {
     glColor4f(r, g, b, a);
-    glBegin(GL_QUADS);
+    Renderer::CountedBegin(GL_QUADS);
     glVertex3f(x - size, y - size, z);
     glVertex3f(x + size, y - size, z);
     glVertex3f(x + size, y + size, z);

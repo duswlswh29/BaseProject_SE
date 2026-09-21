@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Renderer.h"
+#include "Actor.h"
 #include <array>
 #include <string>
 #include <vector>
@@ -38,6 +39,7 @@ class ModelCache
     ModelCache &operator=(const ModelCache &) = delete;
     bool Initialize();
     void Draw(Model model) const;
+    const ActorBounds &Bounds(Model model) const;
     const std::wstring &Status() const;
 
   private:
@@ -54,6 +56,7 @@ class ModelCache
         std::vector<Vertex> vertices;
         GLuint buffer = 0;
         GLsizei count = 0;
+        ActorBounds bounds;
     };
 
     void Generate();
