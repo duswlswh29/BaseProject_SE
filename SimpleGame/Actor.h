@@ -78,6 +78,8 @@ class Actor
     void SetAppearance(const ActorAppearance &appearance);
     const ActorAppearance &Appearance() const;
     void SetDraw(std::function<void()> draw);
+    // Optional batching for identical meshes with translation-only world transforms.
+    std::function<void(const std::vector<Vector3> &, ScenePass)> batchDraw;
 
   private:
     friend class SceneGraph;

@@ -1,4 +1,5 @@
 #include "stdafx.h"
+#include "Profiler.h"
 #include "TutorialLevel.h"
 #include "Renderer.h"
 #include "SceneGraph.h"
@@ -347,6 +348,7 @@ void Visibility(int state)
 
 void Tick(int)
 {
+    Profiling::Scope profile("game.update");
     int now = glutGet(GLUT_ELAPSED_TIME);
     float dt = (std::min)((now - last) / 1000.f, .05f);
     last = now;
@@ -741,6 +743,7 @@ Actor &Place(const wchar_t *name,
 
 void BuildScene()
 {
+    Profiling::Scope profile("scene.build");
     scene.Clear();
     animalActors.clear();
     breadcrumbActors.clear();
@@ -1004,6 +1007,7 @@ void BuildScene()
 
 void SyncScene()
 {
+    Profiling::Scope profile("scene.sync");
     scene.Find(heroActor)->SetTransform(Placement(player, 0, facing));
     for (std::size_t i = 0; i < animals.size(); ++i)
         scene.Find(animalActors[i])
@@ -1035,6 +1039,7 @@ void SyncScene()
 
 void HUD()
 {
+    Profiling::Scope profile("render.hud");
     Panel(24, 22, 775, 116);
     Text(44, 52, L"윌로미어 · 작은 시작", {1, .86f, .55f});
     Text(44, 86, Objective());
@@ -1117,14 +1122,29 @@ void Render()
         return;
     Renderer::BeginFrame();
     SyncScene();
-    renderer->BeginShadow(camera.x, camera.z);
-    scene.Draw(*renderer, ScenePass::Shadow, time);
-    renderer->BeginScene(camera.x, camera.z);
-    scene.Draw(*renderer, ScenePass::World, time);
-    renderer->EndScene();
-    renderer->BeginUI();
-    scene.Draw(*renderer, ScenePass::UI, time);
-    glutSwapBuffers();
+    {
+        Profiling::Scope profile("render.shadow", true);
+        renderer->BeginShadow(camera.x, camera.z);
+        scene.Draw(*renderer, ScenePass::Shadow, time);
+    }
+    {
+        Profiling::Scope profile("render.world", true);
+        renderer->BeginScene(camera.x, camera.z);
+        scene.Draw(*renderer, ScenePass::World, time);
+    }
+    {
+        Profiling::Scope profile("render.postprocess", true);
+        renderer->EndScene();
+    }
+    {
+        Profiling::Scope profile("render.ui", true);
+        renderer->BeginUI();
+        scene.Draw(*renderer, ScenePass::UI, time);
+    }
+    {
+        Profiling::Scope profile("present.swap_buffers", false);
+        glutSwapBuffers();
+    }
     Renderer::EndFrame();
 }
 }

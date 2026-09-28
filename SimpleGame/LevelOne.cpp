@@ -1,4 +1,7 @@
 #include "stdafx.h"
+#include "Profiler.h"
+#include <future>
+#include <array>
 #include "LevelOne.h"
 #include "ModelCache.h"
 #include "RpgWorld.h"
@@ -97,36 +100,87 @@ void Notice(const std::wstring &text)
     messageTimer = 4;
 }
 
+std::future<bool> pendingSave;
+double lastSaveMs = 0;
+unsigned saveFailures = 0;
+
+bool CompleteSave(bool wait)
+{
+    if (!pendingSave.valid())
+        return true;
+    if (!wait && pendingSave.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
+        return false;
+    bool saved = false;
+    try
+    {
+        saved = pendingSave.get();
+    }
+    catch (...)
+    {
+        saved = false;
+    }
+    if (!saved)
+    {
+        ++saveFailures;
+        saveDirty = true;
+        Notice(L"저장 실패: 다음 저장 시 다시 시도합니다.");
+    }
+    return true;
+}
+
 bool SaveProfile()
 {
-    const int record[] = {0x31504752,
-                          1,
-                          stats.level,
-                          stats.experience,
-                          stats.totalExperience,
-                          stats.health,
-                          stats.potions,
-                          stats.crystals,
-                          stats.coins,
-                          stats.kills};
-    const std::wstring temporary = profilePath + L".tmp";
-    std::ofstream output(temporary.c_str(), std::ios::binary | std::ios::trunc);
-    output.write(reinterpret_cast<const char *>(record), sizeof(record));
-    output.flush();
-    const bool okay = output.good();
-    output.close();
-    const bool saved = okay && MoveFileExW(temporary.c_str(),
-                                           profilePath.c_str(),
-                                           MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
-    if (saved)
+    Profiling::Scope profile("io.save_enqueue");
+    if (!CompleteSave(false))
+        return true;
+    const std::array<int, 10> record = {0x31504752,
+                                        1,
+                                        stats.level,
+                                        stats.experience,
+                                        stats.totalExperience,
+                                        stats.health,
+                                        stats.potions,
+                                        stats.crystals,
+                                        stats.coins,
+                                        stats.kills};
+    const std::wstring destination = profilePath;
+    try
     {
-        saveDirty = false;
+        pendingSave = std::async(
+            std::launch::async,
+            [record, destination]
+            {
+                const auto start = std::chrono::steady_clock::now();
+                const std::wstring temporary = destination + L".tmp";
+                std::ofstream output(temporary.c_str(), std::ios::binary | std::ios::trunc);
+                output.write(reinterpret_cast<const char *>(record.data()),
+                             sizeof(int) * record.size());
+                output.flush();
+                const bool okay = output.good();
+                output.close();
+                const bool saved =
+                    okay && MoveFileExW(temporary.c_str(),
+                                        destination.c_str(),
+                                        MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
+                // Read only after the future has completed.
+                lastSaveMs = std::chrono::duration<double, std::milli>(
+                                 std::chrono::steady_clock::now() - start)
+                                 .count();
+                return saved;
+            });
     }
-    return saved;
+    catch (...)
+    {
+        ++saveFailures;
+        return false;
+    }
+    saveDirty = false;
+    return true;
 }
 
 void LoadProfile()
 {
+    Profiling::Scope profile("io.load_profile");
     wchar_t executable[32768] = {};
     GetModuleFileNameW(nullptr, executable, 32768);
     const std::wstring path(executable);
@@ -188,6 +242,7 @@ void Spawn(Enemy &enemy)
 
 void NewMap()
 {
+    Profiling::Scope profile("world.new_map");
     const auto seed = static_cast<std::uint32_t>(
         std::chrono::high_resolution_clock::now().time_since_epoch().count());
     random.seed(seed);
@@ -339,6 +394,7 @@ void Collect()
 
 void UpdateProjectiles(float dt)
 {
+    Profiling::Scope profile("game.projectiles");
     for (Projectile &shot : projectiles)
     {
         const int steps = (std::max)(1, static_cast<int>(std::ceil(dt * 11 / .15f)));
@@ -380,6 +436,7 @@ void UpdateProjectiles(float dt)
 
 void UpdateEnemies(float dt)
 {
+    Profiling::Scope profile("game.enemy_ai");
     pathTimer -= dt;
     if (pathTimer <= 0)
     {
@@ -468,6 +525,11 @@ Actor &AddModel(const std::wstring &name,
     ActorAppearance appearance;
     appearance.meshKey = static_cast<std::uint32_t>(model);
     actor.SetAppearance(appearance);
+    if (model == Model::Tree || model == Model::Rock)
+        actor.batchDraw = [model](const std::vector<Vector3> &positions, ScenePass pass)
+        {
+            models->DrawBatch(model, positions, pass);
+        };
     actor.SetDraw(
         [model]
         {
@@ -478,6 +540,7 @@ Actor &AddModel(const std::wstring &name,
 
 void BuildScene()
 {
+    Profiling::Scope profile("scene.build");
     scene.Clear();
     const ActorId level = scene.Create(L"레벨 1").Id();
     const ActorId terrain = scene.Create(L"정적 지형 청크", level).Id();
@@ -573,6 +636,7 @@ void BuildScene()
 
 void SyncScene()
 {
+    Profiling::Scope profile("scene.sync");
     std::unordered_set<ActorId> keep;
     auto sync = [&](ActorId &id,
                     Model model,
@@ -654,6 +718,7 @@ void ScreenPosition(Point position, float &x, float &y)
 
 void HUD()
 {
+    Profiling::Scope profile("render.hud");
     Panel(20, 18, 720, 172);
     renderer->Text(38, 48, L"레벨 1 · 반딧불 사냥터", 1, .86f, .55f);
     renderer->Text(38,
@@ -682,6 +747,8 @@ void HUD()
                        : L"성장 목표: 캐릭터 레벨 5 달성 · 적을 처치하고 전리품을 모으세요.");
     Panel(1040, 18, 220, 240);
     renderer->Text(1054, 47, L"주변 지도", 1, .86f, .55f);
+    glPointSize(1);
+    Renderer::CountedBegin(GL_POINTS);
     for (int z = 0; z < Rpg::World::Size; ++z)
     {
         for (int x = 0; x < Rpg::World::Size; ++x)
@@ -690,25 +757,25 @@ void HUD()
             glColor3f(tile == Rpg::Tile::Water ? .2f : .35f,
                       tile == Rpg::Tile::Ground ? .55f : .35f,
                       tile == Rpg::Tile::Water ? .75f : .25f);
-            Renderer::CountedBegin(GL_POINTS);
             glVertex2f(1052 + x * 5, 57 + z * 4.5f);
-            glEnd();
         }
     }
+    glEnd();
+    glPointSize(5);
+    Renderer::CountedBegin(GL_POINTS);
     auto dot = [](Point p, float r, float g, float b)
     {
         glColor3f(r, g, b);
-        glPointSize(5);
-        Renderer::CountedBegin(GL_POINTS);
         glVertex2f(1052 + (p.x / Rpg::World::CellSize + 20) * 5,
                    57 + (p.z / Rpg::World::CellSize + 20) * 4.5f);
-        glEnd();
     };
     for (const Enemy &enemy : enemies)
         if (enemy.health > 0)
             dot(enemy.position, 1, .35f, .3f);
     dot({0, 0}, 1, .8f, .3f);
     dot(player, 1, 1, 1);
+    glEnd();
+    glPointSize(1);
     renderer->Text(1054, 251, L"흰색: 나 / 빨강: 적");
     for (const Enemy &enemy : enemies)
     {
@@ -788,8 +855,10 @@ bool Initialize(int width, int height)
 void Shutdown()
 {
     running = false;
+    CompleteSave(true);
     if (!profilePath.empty() && saveDirty)
         SaveProfile();
+    CompleteSave(true);
     scene.Clear();
     models.reset();
     renderer.reset();
@@ -800,15 +869,34 @@ void Render()
     if (!running || !renderer || !renderer->IsInitialized())
         return;
     Renderer::BeginFrame();
+    Profiling::Count("objects.enemies", double(enemies.size()));
+    Profiling::Count("objects.loot", double(loot.size()));
+    Profiling::Count("objects.projectiles", double(projectiles.size()));
+    Profiling::Count("scheduler.timer_requested_ms", 16);
     SyncScene();
-    renderer->BeginShadow(camera.x, camera.z);
-    scene.Draw(*renderer, ScenePass::Shadow, time);
-    renderer->BeginScene(camera.x, camera.z);
-    scene.Draw(*renderer, ScenePass::World, time);
-    renderer->EndScene();
-    renderer->BeginUI();
-    scene.Draw(*renderer, ScenePass::UI, time);
-    glutSwapBuffers();
+    {
+        Profiling::Scope profile("render.shadow", true);
+        renderer->BeginShadow(camera.x, camera.z);
+        scene.Draw(*renderer, ScenePass::Shadow, time);
+    }
+    {
+        Profiling::Scope profile("render.world", true);
+        renderer->BeginScene(camera.x, camera.z);
+        scene.Draw(*renderer, ScenePass::World, time);
+    }
+    {
+        Profiling::Scope profile("render.postprocess", true);
+        renderer->EndScene();
+    }
+    {
+        Profiling::Scope profile("render.ui", true);
+        renderer->BeginUI();
+        scene.Draw(*renderer, ScenePass::UI, time);
+    }
+    {
+        Profiling::Scope profile("present.swap_buffers", false);
+        glutSwapBuffers();
+    }
     Renderer::EndFrame();
 }
 
@@ -834,7 +922,7 @@ void KeyDown(unsigned char key, int, int)
     }
     if (key == 'p')
     {
-        Notice(SaveProfile() ? L"성장 기록을 저장했습니다."
+        Notice(SaveProfile() ? L"성장 기록을 백그라운드에서 저장 중입니다."
                              : L"저장에 실패했습니다. 폴더 권한을 확인하세요.");
         return;
     }
@@ -904,6 +992,12 @@ void Visibility(int state)
 
 void Tick(int)
 {
+    Profiling::Scope profile("game.update");
+    CompleteSave(false);
+    Profiling::Count("io.save_pending", pendingSave.valid() ? 1 : 0);
+    Profiling::Count("io.save_failures_total", saveFailures);
+    if (!pendingSave.valid())
+        Profiling::Count("io.save_last_ms", lastSaveMs);
     if (!running || glutGetWindow() == 0)
         return;
     const int now = glutGet(GLUT_ELAPSED_TIME);

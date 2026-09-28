@@ -3,6 +3,7 @@
 #include "Actor.h"
 #include <unordered_map>
 #include <unordered_set>
+#include <tuple>
 
 class Renderer;
 
@@ -43,4 +44,7 @@ class SceneGraph
     ActorId nextId = 1;
     std::array<std::unordered_set<ActorId>, 3> visible;
     std::array<Statistics, 3> statistics;
+    using SortKey = std::tuple<ActorId, int, int, std::uint32_t>;
+    std::array<std::vector<SortKey>, 3> sortKeys;
+    std::array<std::vector<Actor *>, 3> sortedOpaque;
 };

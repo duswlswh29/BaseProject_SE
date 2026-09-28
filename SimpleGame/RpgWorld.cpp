@@ -1,4 +1,5 @@
 #include "stdafx.h"
+#include "Profiler.h"
 #include "RpgWorld.h"
 #include <algorithm>
 #include <cmath>
@@ -39,6 +40,7 @@ int World::Index(Point position) const
 
 bool World::Walkable(Point position, float radius) const
 {
+    Profiling::Scope profile("world.collision_query");
     const Point corners[] = {{position.x - radius, position.z - radius},
                              {position.x + radius, position.z - radius},
                              {position.x - radius, position.z + radius},
@@ -56,6 +58,7 @@ bool World::Walkable(Point position, float radius) const
 
 std::vector<int> World::DistancesFrom(Point target) const
 {
+    Profiling::Scope profile("world.pathfinding");
     std::vector<int> distances(Size * Size, -1);
     const int start = Index(target);
     if (start < 0 || tiles[start] != Tile::Ground)
@@ -92,6 +95,7 @@ std::vector<int> World::DistancesFrom(Point target) const
 
 bool World::Connected() const
 {
+    Profiling::Scope profile("world.connectivity");
     const auto distances = DistancesFrom({0, 0});
     for (int cell = 0; cell < Size * Size; ++cell)
     {
@@ -105,6 +109,7 @@ bool World::Connected() const
 
 void World::Generate(std::uint32_t seed)
 {
+    Profiling::Scope profile("world.generate");
     mapSeed = seed;
     tiles.fill(Tile::Ground);
     std::mt19937 random(seed);

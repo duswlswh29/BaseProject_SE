@@ -1,4 +1,5 @@
 #include "stdafx.h"
+#include "Profiler.h"
 #include "Renderer.h"
 #include "RenderShaders.h"
 #include <algorithm>
@@ -6,6 +7,7 @@
 #include <vector>
 #include <cstdint>
 #include <cstdio>
+#include <chrono>
 
 namespace
 {
@@ -31,29 +33,31 @@ void Quad()
 
 void Renderer::BeginFrame()
 {
+    Profiling::BeginFrame();
     ++frameNumber;
     immediateCalls = arrayCalls = toolkitShapes = 0;
 }
 
 void Renderer::EndFrame()
 {
-    std::printf(
-        "[Frame %llu] Draw calls: %llu (arrays: %llu, immediate: %llu), FreeGLUT shapes: %llu\n",
-        static_cast<unsigned long long>(frameNumber),
-        static_cast<unsigned long long>(immediateCalls + arrayCalls),
-        static_cast<unsigned long long>(arrayCalls),
-        static_cast<unsigned long long>(immediateCalls),
-        static_cast<unsigned long long>(toolkitShapes));
+    Profiling::Count("draw_calls.total", double(immediateCalls + arrayCalls));
+    Profiling::Count("draw_calls.arrays", double(arrayCalls));
+    Profiling::Count("draw_calls.immediate", double(immediateCalls));
+    Profiling::Count("draw_calls.freeglut_shapes", double(toolkitShapes));
+    Profiling::EndFrame();
 }
 
 void Renderer::CountedBegin(GLenum mode)
 {
+    ++Profiling::Get().drawCalls;
     ++immediateCalls;
     glBegin(mode);
 }
 
 void Renderer::CountedDrawArrays(GLenum mode, GLint first, GLsizei count)
 {
+    ++Profiling::Get().drawCalls;
+    Profiling::Count("geometry.submitted_vertices", count);
     ++arrayCalls;
     glDrawArrays(mode, first, count);
 }
@@ -183,6 +187,7 @@ void Renderer::ReleaseTargets()
 
 Renderer::~Renderer()
 {
+    Profiling::Shutdown();
     ReleaseTargets();
     if (shadowFbo)
         glDeleteFramebuffers(1, &shadowFbo);
@@ -429,11 +434,16 @@ void Renderer::Text(float x, float baseline, const std::wstring &value, float r,
 {
     if (value.empty() || !textDC)
         return;
+    Profiling::Scope textProfile("render.text");
+    Profiling::Count("text.requests");
     auto found = labels.find(value);
     if (found == labels.end())
     {
+        Profiling::Scope rasterProfile("render.text_cache_miss");
+        Profiling::Count("text.cache_misses");
         if (labels.size() > 160)
         {
+            Profiling::Count("text.cache_evictions", double(labels.size()));
             for (auto &p : labels)
                 glDeleteTextures(1, &p.second.texture);
             labels.clear();

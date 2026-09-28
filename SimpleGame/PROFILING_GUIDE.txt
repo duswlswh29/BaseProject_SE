@@ -1,0 +1,81 @@
+지속 성능 계측 지침 (schema 1)
+
+실행 파일 옆 profile-프로세스ID-세션ID-분할번호.jsonl에 기록한다.
+프레임별 상세 기록을 메모리에 모아 약 1초마다 전용 작업 스레드에 넘긴다.
+파일 쓰기와 콘솔 요약은 작업 스레드가 담당한다. OpenGL 호출은 메인 스레드 전용이다.
+대기 작업은 최대 4개다. 적체 시 로그 배치를 버리고 dropped_batches_total에 기록한다.
+누락이 있는 구간은 완전한 성능 표본으로 취급하지 않는다.
+32MiB마다 다음 파일로 분할한다. 오래된 파일은 자동 삭제하지 않으므로 정리해야 한다.
+종료 시 남은 버퍼를 저장한다. 비정상 종료 시 마지막 약 1초는 유실될 수 있다.
+
+event=frame: frame, frame_interval_ms, fps, cpu_scopes, counters.
+cpu_scopes의 각 항목: total_ms(누적 CPU 경과 시간), max_ms(최대 단일 호출), calls.
+CPU 시간은 스레드의 순수 CPU 사용량이 아니라 대기까지 포함한 wall-clock 시간이다.
+중첩 스코프는 inclusive이므로 서로 더해 전체 시간으로 해석하지 않는다.
+업데이트/입력 콜백은 다음 렌더 프레임의 기록에 합산된다.
+첫 프레임 간격과 FPS는 null. 첫 기록에는 초기화 비용이 포함될 수 있다.
+
+event=gpu_pass: 원래 frame 번호, stage, gpu_ms.
+GPU 타임스탬프 결과는 비동기로 도착하므로 줄 순서가 아닌 frame으로 연결한다.
+결과 준비 여부만 확인하고 기다리지 않는다. glFinish를 호출하지 않는다.
+64개 측정 슬롯이 모두 사용 중이면 gpu_query_samples_skipped를 증가시킨다.
+지원 불가/누락된 GPU 시간은 0ms가 아니라 측정 불가로 해석한다.
+종료 전 아직 준비되지 않은 GPU 결과는 gpu_sample_discarded 이벤트로 표시한다.
+
+측정 범위
+- game.update / enemy_ai / projectiles: 게임 업데이트와 주요 하위 작업
+- world.pathfinding / collision_query / connectivity / generate: 경로/충돌/생성
+- scene.sync / build / update_transforms / frustum_cull / sort_draws / draw_submission
+- render.shadow / world / postprocess / ui: CPU 및 GPU 렌더 패스
+- render.hud / text / text_cache_miss: UI 및 글자 래스터화/업로드
+- present.swap_buffers: 화면 전환 호출의 CPU 대기 포함 시간
+- io.save_profile / load_profile / model_cache_load / model_cache_save
+- assets.initialize / generate_meshes
+- profiler.gpu_poll / log_flush: 일부 계측 오버헤드 (다음 기록에 포함될 수 있음)
+- counters: 패스별 직접 드로 호출, 제출 정점, 오브젝트 수, 컬링 통계, 텍스트 캐시
+
+해석
+게임 업데이트는 glutTimerFunc(16, ...)로 예약하고 렌더 요청은 idle 콜백으로 분리했다.
+드라이버 수직동기화 정책은 변경하지 않았다. 드라이버 설정에 따라 FPS가 제한될 수 있다.
+FPS가 60 근처라는 사실만으로 GPU 병목을 단정하지 않는다.
+frame_interval_ms에는 타이머/OS 스케줄링, 스왑 대기, 로깅 등의 비용도 포함된다.
+CPU 패스와 GPU 패스 시간이 모두 짧으면 타이머와 present.swap_buffers를 확인한다.
+평균뿐 아니라 frame_interval_ms의 p95/p99 및 느린 프레임의 각 stage를 비교한다.
+Debug/Release, 해상도, GPU, 드라이버, 수직동기화, 장면과 플레이 조건을 함께 남긴다.
+이 파일의 드로 호출은 애플리케이션 API 제출 수이며 드라이버 내부 작업 수가 아니다.
+FreeGLUT 내부 도형 드로 호출은 기존처럼 별도 도형 호출 수로 기록한다.
+
+확장
+새 CPU 작업에는 Profiling::Scope scope("domain.operation");를 넣는다.
+독립 GPU 패스에는 Scope("render.new_pass", true)를 쓴다.
+이름은 고정된 ASCII 식별자만 사용한다. 사용자 입력/오브젝트별 이름을 넣지 않는다.
+Count("domain.counter", value)로 수치를 집계한다. 매 정점 스코프는 피한다.
+Scope/Count는 단일 OpenGL/게임 스레드 전용이다. 파일 작업자는 이 API를 호출하지 않는다.
+작업자는 원자적 통계로 상태를 전달하고 다음 메인 프레임에서 기록한다.
+메모리 할당 추적, VRAM 사용량, 드라이버 내부 병목, OS 스케줄링 원인 자체는
+자동 측정하지 않는다. 필요한 경우 전용 외부 프로파일러를 병행한다.
+계측 자체도 비용이 있으므로 기록으로 얻은 후보를 실제 화면과 함께 검증한다.
+
+2026-09-28 추가 항목과 변경
+session 이벤트: Debug/Release, GPU 이름, GL 버전, GPU 타이머 지원, 렌더 스케줄러.
+profiler.writer_queue_depth: 파일 작업 대기 개수 (실행 중 작업 제외).
+profiler.dropped_batches_total: 큐 포화 시 거절된 로그/콘솔 작업 누계.
+profiler.writer_failures_total / file_failed: 작업 예외 수 / 파일 오류 상태.
+profiler.writer_last_ms: 가장 최근 완료한 작업 시간 (콘솔 작업일 수도 있음).
+profiler.frame_serialization: 프레임 JSON 직렬화 시간. 다음 프레임에 기록된다.
+profiler.log_flush: 이제 디스크 쓰기가 아니라 큐 전달과 콘솔 작업 예약 비용이다.
+io.save_enqueue: 저장 스냅샷 복사 및 비동기 작업 예약 시간.
+io.save_pending / save_failures_total / save_last_ms: 저장 상태/실패 누계/최근 완료 시간.
+save_last_ms는 마지막 완료 값이며 매 프레임 새로운 저장 표본이 아니다.
+저장은 동시에 하나만 실행하며 임시 파일을 쓴 뒤 원본을 교체한다.
+저장 중 새 게임 변경은 dirty 상태로 남고 다음 저장 또는 종료에서 반영한다.
+종료 시 저장과 로그 작업 완료를 기다린다. 종료 지연은 플레이 중 프레임 지연과 구분한다.
+scene.sort_cache_hits / misses: 표시 Actor ID 및 정렬 키가 같으면 불투명 정렬 재사용.
+render.batch_cache_hits / misses / batched_actors: 나무·바위 배칭 캐시와 대상 수.
+geometry.batch_upload_bytes: 표시 집합 변경에 따른 결합 VBO 업로드 바이트.
+render.static_batch / static_batch_rebuild: 배칭 제출/정점 결합과 업로드 CPU 비용.
+배칭은 현재 레벨 1의 이동 변환만 있는 나무·바위에 적용한다.
+Actor별 컬링 후 표시 집합을 합치므로 개별 오브젝트 가시성 판단은 유지한다.
+이동으로 표시 집합이 자주 바뀌면 재업로드가 발생하므로 이동 중 로그도 비교한다.
+첫 프레임 배칭 생성과 텍스트 초기화 비용은 정상 플레이 통계와 분리한다.
+이 계측만으로 모든 병목 원인을 자동 측정할 수는 없다. VRAM/OS/드라이버 내부는 별도 도구가 필요하다.

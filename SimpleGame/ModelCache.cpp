@@ -1,4 +1,5 @@
 #include "stdafx.h"
+#include "Profiler.h"
 #include "ModelCache.h"
 #include <algorithm>
 #include <cmath>
@@ -25,6 +26,9 @@ std::uint32_t Checksum(const void *data, std::size_t length)
 
 ModelCache::~ModelCache()
 {
+    for (auto &batch : batches)
+        if (batch.mesh.buffer)
+            glDeleteBuffers(1, &batch.mesh.buffer);
     for (Mesh &mesh : meshes)
     {
         if (mesh.buffer)
@@ -36,6 +40,7 @@ ModelCache::~ModelCache()
 
 bool ModelCache::Initialize()
 {
+    Profiling::Scope profile("assets.initialize");
     wchar_t executable[32768] = {};
     const DWORD count = GetModuleFileNameW(nullptr, executable, 32768);
     if (!count || count >= 32768)
@@ -80,7 +85,9 @@ bool ModelCache::Initialize()
             return false;
         }
         // The disk file is the CPU source for subsequent executions.
-        mesh.vertices.clear();
+        if (&mesh != &meshes[static_cast<int>(Model::Tree)] &&
+            &mesh != &meshes[static_cast<int>(Model::Rock)])
+            mesh.vertices.clear();
         mesh.vertices.shrink_to_fit();
     }
     glBindBuffer(GL_ARRAY_BUFFER, 0);
@@ -89,6 +96,7 @@ bool ModelCache::Initialize()
 
 bool ModelCache::Load(const std::wstring &path)
 {
+    Profiling::Scope profile("io.model_cache_load");
     std::ifstream input(path.c_str(), std::ios::binary);
     std::uint32_t header[4] = {};
     if (!input.read(reinterpret_cast<char *>(header), sizeof(header)) || header[0] != CacheMagic ||
@@ -127,6 +135,7 @@ bool ModelCache::Load(const std::wstring &path)
 
 bool ModelCache::Save(const std::wstring &path) const
 {
+    Profiling::Scope profile("io.model_cache_save");
     const std::wstring temporary = path + L".tmp";
     std::ofstream output(temporary.c_str(), std::ios::binary | std::ios::trunc);
     const std::uint32_t header[] = {
@@ -150,7 +159,54 @@ bool ModelCache::Save(const std::wstring &path) const
 
 void ModelCache::Draw(Model model) const
 {
-    const Mesh &mesh = meshes[static_cast<std::size_t>(model)];
+    DrawMesh(meshes[static_cast<std::size_t>(model)]);
+}
+
+void ModelCache::DrawBatch(Model model, const std::vector<Vector3> &positions, ScenePass pass)
+{
+    Profiling::Scope profile("render.static_batch");
+    Batch &batch = batches[(model == Model::Tree ? 0 : 2) + (pass == ScenePass::Shadow ? 1 : 0)];
+    bool changed = positions.size() != batch.positions.size();
+    if (!changed)
+        for (std::size_t i = 0; i < positions.size(); ++i)
+            if (positions[i].x != batch.positions[i].x || positions[i].y != batch.positions[i].y ||
+                positions[i].z != batch.positions[i].z)
+            {
+                changed = true;
+                break;
+            }
+    if (changed)
+    {
+        Profiling::Scope rebuild("render.static_batch_rebuild");
+        const Mesh &source = meshes[static_cast<std::size_t>(model)];
+        std::vector<Vertex> vertices;
+        vertices.reserve(source.vertices.size() * positions.size());
+        for (const auto &position : positions)
+            for (Vertex vertex : source.vertices)
+            {
+                vertex.position[0] += position.x;
+                vertex.position[1] += position.y;
+                vertex.position[2] += position.z;
+                vertices.push_back(vertex);
+            }
+        if (!batch.mesh.buffer)
+            glGenBuffers(1, &batch.mesh.buffer);
+        glBindBuffer(GL_ARRAY_BUFFER, batch.mesh.buffer);
+        glBufferData(
+            GL_ARRAY_BUFFER, vertices.size() * sizeof(Vertex), vertices.data(), GL_DYNAMIC_DRAW);
+        Profiling::Count("geometry.batch_upload_bytes", double(vertices.size() * sizeof(Vertex)));
+        batch.mesh.count = static_cast<GLsizei>(vertices.size());
+        batch.positions = positions;
+        Profiling::Count("render.batch_cache_misses");
+    }
+    else
+        Profiling::Count("render.batch_cache_hits");
+    Profiling::Count("render.batched_actors", double(positions.size()));
+    DrawMesh(batch.mesh);
+}
+
+void ModelCache::DrawMesh(const Mesh &mesh) const
+{
     glBindBuffer(GL_ARRAY_BUFFER, mesh.buffer);
     glEnableClientState(GL_VERTEX_ARRAY);
     glEnableClientState(GL_NORMAL_ARRAY);
@@ -261,6 +317,7 @@ void ModelCache::Grid(Mesh &mesh, int divisions, bool vertical)
 
 void ModelCache::Generate()
 {
+    Profiling::Scope profile("assets.generate_meshes");
     for (Mesh &mesh : meshes)
     {
         mesh.vertices.clear();

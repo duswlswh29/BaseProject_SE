@@ -39,6 +39,7 @@ class ModelCache
     ModelCache &operator=(const ModelCache &) = delete;
     bool Initialize();
     void Draw(Model model) const;
+    void DrawBatch(Model model, const std::vector<Vector3> &positions, ScenePass pass);
     const ActorBounds &Bounds(Model model) const;
     const std::wstring &Status() const;
 
@@ -60,6 +61,15 @@ class ModelCache
     };
 
     void Generate();
+    void DrawMesh(const Mesh &mesh) const;
+
+    struct Batch
+    {
+        Mesh mesh;
+        std::vector<Vector3> positions;
+    };
+
+    std::array<Batch, 4> batches;
     bool Load(const std::wstring &path);
     bool Save(const std::wstring &path) const;
     void Box(Mesh &mesh,

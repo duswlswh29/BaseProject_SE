@@ -1,4 +1,5 @@
 #include "stdafx.h"
+#include "Profiler.h"
 #include "SceneGraph.h"
 #include "Renderer.h"
 #include <algorithm>
@@ -13,6 +14,10 @@ SceneGraph::SceneGraph()
 
 void SceneGraph::Clear()
 {
+    for (auto &keys : sortKeys)
+        keys.clear();
+    for (auto &order : sortedOpaque)
+        order.clear();
     index.clear();
     root.reset(new Actor(0, L"장면 루트"));
     index.emplace(0, root.get());
@@ -114,6 +119,7 @@ void SceneGraph::RetainChildren(ActorId parentId, const std::unordered_set<Actor
 
 void SceneGraph::UpdateTransforms()
 {
+    Profiling::Scope profile("scene.update_transforms");
     root->Update(Matrix4{}, false);
 }
 
@@ -175,28 +181,65 @@ void SceneGraph::Draw(Renderer &renderer, ScenePass pass, float seconds)
                     clip.values[component * 4 + 3] +
                     (side == 0 ? 1.f : -1.f) * clip.values[component * 4 + axis];
     std::vector<Actor *> draws;
-    Gather(*root, frustum, pass, draws);
+    {
+        Profiling::Scope profile("scene.frustum_cull");
+        Gather(*root, frustum, pass, draws);
+    }
     if (pass != ScenePass::UI)
     {
-        std::stable_sort(draws.begin(),
-                         draws.end(),
+        Profiling::Scope profile("scene.sort_draws");
+        std::vector<Actor *> opaque, additive;
+        std::vector<SortKey> keys;
+        opaque.reserve(draws.size());
+        keys.reserve(draws.size());
+        for (Actor *actor : draws)
+        {
+            const auto &look = actor->appearance;
+            if (look.additive)
+                additive.push_back(actor);
+            else
+            {
+                opaque.push_back(actor);
+                keys.emplace_back(actor->Id(), look.material, look.effect, look.meshKey);
+            }
+        }
+        if (keys != sortKeys[passIndex])
+        {
+            std::stable_sort(opaque.begin(),
+                             opaque.end(),
+                             [](const Actor *a, const Actor *b)
+                             {
+                                 const auto &x = a->appearance;
+                                 const auto &y = b->appearance;
+                                 return std::tie(x.material, x.effect, x.meshKey) <
+                                        std::tie(y.material, y.effect, y.meshKey);
+                             });
+            sortKeys[passIndex] = std::move(keys);
+            sortedOpaque[passIndex] = std::move(opaque);
+            Profiling::Count("scene.sort_cache_misses");
+        }
+        else
+            Profiling::Count("scene.sort_cache_hits");
+        std::stable_sort(additive.begin(),
+                         additive.end(),
                          [&view](const Actor *a, const Actor *b)
                          {
-                             const auto &x = a->appearance;
-                             const auto &y = b->appearance;
-                             if (x.additive != y.additive)
-                                 return !x.additive;
-                             if (x.additive)
-                             {
-                                 return view.TransformPoint(a->world.TransformPoint({})).z <
-                                        view.TransformPoint(b->world.TransformPoint({})).z;
-                             }
-                             return std::tie(x.material, x.effect, x.meshKey) <
-                                    std::tie(y.material, y.effect, y.meshKey);
+                             return view.TransformPoint(a->world.TransformPoint({})).z <
+                                    view.TransformPoint(b->world.TransformPoint({})).z;
                          });
+        draws = sortedOpaque[passIndex];
+        draws.insert(draws.end(), additive.begin(), additive.end());
     }
-    for (Actor *actor : draws)
+    const std::string passName =
+        pass == ScenePass::Shadow ? "shadow" : (pass == ScenePass::World ? "world" : "ui");
+    Profiling::Count("scene." + passName + ".visited", statistics[passIndex].visited);
+    Profiling::Count("scene." + passName + ".rejected_subtrees",
+                     statistics[passIndex].rejectedSubtrees);
+    Profiling::Count("scene." + passName + ".submitted_actors", double(draws.size()));
+    Profiling::Scope submission("scene.draw_submission");
+    for (std::size_t drawIndex = 0; drawIndex < draws.size(); ++drawIndex)
     {
+        Actor *actor = draws[drawIndex];
         if (pass != ScenePass::UI)
         {
             const auto &look = actor->appearance;
@@ -213,6 +256,34 @@ void SceneGraph::Draw(Renderer &renderer, ScenePass pass, float seconds)
                 glDisable(GL_BLEND);
                 glDepthMask(GL_TRUE);
             }
+        }
+        auto canBatch = [](const Actor *node)
+        {
+            if (!node->batchDraw || node->appearance.additive)
+                return false;
+            Matrix4 linear = node->world;
+            linear.values[12] = linear.values[13] = linear.values[14] = 0;
+            return linear.values == Matrix4{}.values;
+        };
+        if (pass != ScenePass::UI && canBatch(actor))
+        {
+            std::vector<Vector3> positions;
+            std::size_t next = drawIndex;
+            for (; next < draws.size(); ++next)
+            {
+                Actor *candidate = draws[next];
+                const auto &a = actor->appearance;
+                const auto &b = candidate->appearance;
+                if (!canBatch(candidate) || a.meshKey != b.meshKey || a.material != b.material ||
+                    a.effect != b.effect || a.emission != b.emission ||
+                    a.textureRepeat != b.textureRepeat)
+                    break;
+                positions.push_back(candidate->world.TransformPoint({}));
+            }
+            actor->batchDraw(positions, pass);
+            statistics[passIndex].submitted += static_cast<unsigned>(positions.size());
+            drawIndex = next - 1;
+            continue;
         }
         glPushMatrix();
         glMultMatrixf(actor->world.values.data());

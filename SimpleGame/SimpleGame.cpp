@@ -17,6 +17,27 @@ but WITHOUT ANY WARRANTY.
 #include "LevelOne.h"
 #include <cstring>
 
+namespace
+{
+void RequestRedraw()
+{
+    if (glutGetWindow() != 0)
+        glutPostRedisplay();
+}
+
+void TutorialVisibility(int state)
+{
+    Tutorial::Visibility(state);
+    glutIdleFunc(state == GLUT_VISIBLE ? RequestRedraw : nullptr);
+}
+
+void LevelVisibility(int state)
+{
+    LevelOne::Visibility(state);
+    glutIdleFunc(state == GLUT_VISIBLE ? RequestRedraw : nullptr);
+}
+}
+
 int main(int argc, char **argv)
 {
     const bool tutorial = argc > 1 && std::strcmp(argv[1], "--tutorial") == 0;
@@ -56,6 +77,27 @@ int main(int argc, char **argv)
         Tutorial::Reset();
     }
     glutDisplayFunc(tutorial ? Tutorial::Render : LevelOne::Render);
+    // Rendering no longer waits for the 16 ms gameplay timer.
+    glutIdleFunc(
+        []
+        {
+            if (glutGetWindow() != 0)
+                glutPostRedisplay();
+        });
+    glutReshapeFunc(tutorial ? Tutorial::Resize : LevelOne::Resize);
+    glutKeyboardFunc(tutorial ? Tutorial::KeyDown : LevelOne::KeyDown);
+    glutKeyboardUpFunc(tutorial ? Tutorial::KeyUp : LevelOne::KeyUp);
+    glutVisibilityFunc(tutorial ? TutorialVisibility : LevelVisibility);
+    if (!tutorial)
+    {
+        glutMouseFunc(LevelOne::Mouse);
+    }
+    glutIgnoreKeyRepeat(1);
+    glutCloseFunc(tutorial ? Tutorial::Shutdown : LevelOne::Shutdown);
+    glutTimerFunc(16, tutorial ? Tutorial::Tick : LevelOne::Tick, 0);
+    glutMainLoop();
+    return 0;
+    glutIdleFunc(RequestRedraw);
     glutReshapeFunc(tutorial ? Tutorial::Resize : LevelOne::Resize);
     glutKeyboardFunc(tutorial ? Tutorial::KeyDown : LevelOne::KeyDown);
     glutKeyboardUpFunc(tutorial ? Tutorial::KeyUp : LevelOne::KeyUp);

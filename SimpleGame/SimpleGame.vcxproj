@@ -166,6 +166,8 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Renderer.h" />
+    <ClInclude Include="Profiler.h" />
+    <ClInclude Include="BackgroundWriter.h" />
     <ClInclude Include="RenderShaders.h" />
     <ClInclude Include="TutorialLevel.h" />
     <ClInclude Include="LevelOne.h" />
