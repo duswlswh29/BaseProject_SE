@@ -22,6 +22,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Actor.h"><Filter>헤더 파일</Filter></ClInclude>
+    <ClInclude Include="Monitoring.h"><Filter>헤더 파일</Filter></ClInclude>
     <ClInclude Include="Profiler.h"><Filter>헤더 파일</Filter></ClInclude>
     <ClInclude Include="BackgroundWriter.h"><Filter>헤더 파일</Filter></ClInclude>
     <ClInclude Include="SceneGraph.h"><Filter>헤더 파일</Filter></ClInclude>

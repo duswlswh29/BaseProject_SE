@@ -40,7 +40,7 @@ void LevelVisibility(int state)
 
 int main(int argc, char **argv)
 {
-    const bool tutorial = argc > 1 && std::strcmp(argv[1], "--tutorial") == 0;
+    const bool tutorial = !(argc > 1 && std::strcmp(argv[1], "--level1") == 0);
     glutInit(&argc, argv);
     glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGBA | GLUT_DEPTH);
     glutInitContextVersion(3, 3);
