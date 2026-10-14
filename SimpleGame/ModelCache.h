@@ -27,6 +27,7 @@ enum class Model
     Water,
     Flame,
     Camp,
+    GrassTuft,
     Count
 };
 

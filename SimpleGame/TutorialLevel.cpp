@@ -1393,10 +1393,10 @@ void BuildScene()
             L"들풀 군락",
             chunkFor(shrub),
             Placement(shrub, 0, 0, .55f, .24f, .55f),
-            villageModels->Bounds(Model::Tree),
+            villageModels->Bounds(Model::GrassTuft),
             []
             {
-                villageModels->Draw(Model::Tree);
+                villageModels->Draw(Model::GrassTuft);
             },
             false);
     for (P rock : rocks)

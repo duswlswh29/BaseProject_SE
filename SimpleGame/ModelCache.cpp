@@ -10,7 +10,7 @@
 namespace
 {
 constexpr std::uint32_t CacheMagic = 0x314D5052;
-constexpr std::uint32_t CacheVersion = 3;
+constexpr std::uint32_t CacheVersion = 4;
 
 std::uint32_t Checksum(const void *data, std::size_t length)
 {
@@ -360,6 +360,38 @@ void ModelCache::Generate()
         Ellipsoid(boar, side * .21f, .47f, .71f, .05f, .12f, .06f, .94f, .87f, .65f);
     }
     Mesh &tree = meshes[static_cast<int>(Model::Tree)];
+    // Upright, stepped blades replace the miniature-tree ground decoration.
+    // The existing decoration transform compresses their height by .24.
+    Mesh &grassTuft = meshes[static_cast<int>(Model::GrassTuft)];
+    for (int blade = 0; blade < 7; ++blade)
+    {
+        const float x = float((blade * 3) % 7 - 3) * .14f;
+        const float z = float((blade * 5) % 7 - 3) * .13f;
+        const float height = 1.35f + float((blade * 3) % 5) * .25f;
+        const float green = .36f + float(blade % 3) * .055f;
+        Box(grassTuft, x, height * .30f, z, .16f, height * .60f, .10f, .19f, green, .09f);
+        const float lean = blade % 2 == 0 ? .07f : -.07f;
+        Box(grassTuft,
+            x + lean,
+            height * .73f,
+            z,
+            .12f,
+            height * .26f,
+            .08f,
+            .28f,
+            green + .10f,
+            .12f);
+        Box(grassTuft,
+            x + lean * 2,
+            height * .93f,
+            z,
+            .07f,
+            height * .14f,
+            .07f,
+            .37f,
+            green + .15f,
+            .17f);
+    }
     Box(tree, 0, 1.25f, 0, .25f, 2.5f, .25f, .25f, .14f, .07f);
     // Layered evergreen boughs share one cached mesh and the existing footprint.
     for (int tier = 0; tier < 5; ++tier)
