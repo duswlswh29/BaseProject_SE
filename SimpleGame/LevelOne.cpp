@@ -852,6 +852,27 @@ bool Initialize(int width, int height)
     return true;
 }
 
+Rpg::Stats &PlayerStats()
+{
+    return stats;
+}
+
+void SaveSharedProgress()
+{
+    saveDirty = true;
+    SaveProfile();
+}
+
+void Activate()
+{
+    paused = false;
+    inventoryOpen = false;
+    confirmNewMap = false;
+    mouseAttack = false;
+    std::fill(keys, keys + 256, false);
+    lastTime = glutGet(GLUT_ELAPSED_TIME);
+}
+
 void Shutdown()
 {
     running = false;
@@ -1044,6 +1065,5 @@ void Tick(int)
         }
     }
     glutPostRedisplay();
-    glutTimerFunc(16, Tick, 0);
 }
 }

@@ -252,28 +252,33 @@ void Renderer::MakeMaterials()
             {
                 unsigned hash = (unsigned(x) * 73856093u) ^ (unsigned(y) * 19349663u);
                 float noise = float(hash % 31) / 255.f;
-                float r = .52f, g = .64f, b = .35f;
+                float r = .25f, g = .39f, b = .17f;
                 if (m == Grass)
                 {
-                    r += noise;
-                    g += noise;
-                    b += noise * .5f;
+                    // Coarse texels remain readable at the quarter-view camera distance.
+                    unsigned pixel = (unsigned(x / 8) * 73856093u) ^ (unsigned(y / 8) * 19349663u);
+                    float fleck = float(pixel % 13) * .014f;
+                    r += fleck;
+                    g += fleck;
+                    b += fleck * .55f;
                 }
                 if (m == Stone)
                 {
                     int row = y / 24, xx = (x + (row % 2) * 16) % 32;
                     bool mortar = xx < 2 || y % 24 < 2;
-                    float tone = mortar ? .28f : .59f + float((x / 32 + y / 24) % 3) * .04f + noise;
-                    r = tone;
-                    g = tone * .94f;
-                    b = tone * .79f;
+                    float tone =
+                        mortar ? .20f : .43f + float((x / 32 + y / 24) % 3) * .055f + noise;
+                    const bool moss = ((x / 5 * 13 + y / 5 * 7) % 17 < 4);
+                    r = tone * (moss ? .61f : 1.f);
+                    g = tone * (moss ? .86f : .96f);
+                    b = tone * (moss ? .40f : .85f);
                 }
                 if (m == Wood)
                 {
                     float grain = .05f * std::sin(x * .8f + std::sin(y * .09f) * 2);
-                    r = .52f + grain + noise;
-                    g = .32f + grain;
-                    b = .17f + grain;
+                    r = .39f + grain + noise;
+                    g = .23f + grain;
+                    b = .10f + grain;
                     if (x % 32 < 2)
                     {
                         r *= .6f;
@@ -285,9 +290,10 @@ void Renderer::MakeMaterials()
                 {
                     bool seam = y % 20 < 2 || (x + (y / 20 % 2) * 12) % 24 < 2;
                     float v = seam ? .6f : 1.f;
-                    r = (.64f + noise) * v;
-                    g = (.32f + noise) * v;
-                    b = (.24f + noise) * v;
+                    const float moss = ((x / 6 + y / 4 * 3) % 11 < 3) ? .07f : 0.f;
+                    r = (.27f + noise - moss) * v;
+                    g = (.31f + noise + moss) * v;
+                    b = (.25f + noise - moss) * v;
                 }
                 int i = (y * 128 + x) * 3;
                 data[i] = static_cast<unsigned char>(r * 255);
@@ -298,7 +304,7 @@ void Renderer::MakeMaterials()
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, 128, 128, 0, GL_RGB, GL_UNSIGNED_BYTE, data.data());
         glGenerateMipmap(GL_TEXTURE_2D);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, m == Grass ? GL_NEAREST : GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
     }
@@ -378,7 +384,7 @@ void Renderer::MaterialMode(int material, float emission, float textureRepeat)
 {
     if (shadowPass)
         return;
-    glUniform1i(materialLocation, material >= 0 ? 1 : 0);
+    glUniform1i(materialLocation, material >= 0 ? material + 1 : 0);
     glUniform1f(emissionLocation, emission);
     glUniform1f(glGetUniformLocation(worldProgram, "textureRepeat"), textureRepeat);
     if (material >= 0 && material < MaterialCount)

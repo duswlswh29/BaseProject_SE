@@ -1,8 +1,12 @@
 #pragma once
+#include "RpgWorld.h"
 
 namespace LevelOne
 {
 bool Initialize(int width, int height);
+Rpg::Stats &PlayerStats();
+void SaveSharedProgress();
+void Activate();
 void Shutdown();
 void Render();
 void Resize(int width, int height);

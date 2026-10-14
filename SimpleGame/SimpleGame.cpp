@@ -19,96 +19,140 @@ but WITHOUT ANY WARRANTY.
 
 namespace
 {
+bool village = true;
+bool closed = false;
+bool ready = false;
+int windowWidth = 1280, windowHeight = 800;
+
 void RequestRedraw()
 {
-    if (glutGetWindow() != 0)
+    if (!closed && glutGetWindow())
         glutPostRedisplay();
 }
 
-void TutorialVisibility(int state)
+void Display()
 {
-    Tutorial::Visibility(state);
+    if (village)
+        Tutorial::Render();
+    else
+        LevelOne::Render();
+}
+
+void Resize(int w, int h)
+{
+    windowWidth = w;
+    windowHeight = h;
+    if (village)
+        Tutorial::Resize(w, h);
+    else
+        LevelOne::Resize(w, h);
+}
+
+void KeyDown(unsigned char key, int x, int y)
+{
+    if (key == '\t')
+    {
+        LevelOne::SaveSharedProgress();
+        village = !village;
+        if (village)
+            Tutorial::Activate();
+        else
+            LevelOne::Activate();
+        Resize(windowWidth, windowHeight);
+        SetWindowTextW(WindowFromDC(wglGetCurrentDC()),
+                       village ? L"윌로미어 - 마을 [Tab: 사냥터]"
+                               : L"윌로미어 - 사냥터 [Tab: 마을]");
+        RequestRedraw();
+        return;
+    }
+    if (village)
+        Tutorial::KeyDown(key, x, y);
+    else
+        LevelOne::KeyDown(key, x, y);
+}
+
+void KeyUp(unsigned char key, int x, int y)
+{
+    if (village)
+        Tutorial::KeyUp(key, x, y);
+    else
+        LevelOne::KeyUp(key, x, y);
+}
+
+void Mouse(int button, int state, int x, int y)
+{
+    if (village)
+        Tutorial::Mouse(button, state, x, y);
+    else
+        LevelOne::Mouse(button, state, x, y);
+}
+
+void Visibility(int state)
+{
+    if (village)
+        Tutorial::Visibility(state);
+    else
+        LevelOne::Visibility(state);
     glutIdleFunc(state == GLUT_VISIBLE ? RequestRedraw : nullptr);
 }
 
-void LevelVisibility(int state)
+void Tick(int)
 {
-    LevelOne::Visibility(state);
-    glutIdleFunc(state == GLUT_VISIBLE ? RequestRedraw : nullptr);
+    if (closed || !glutGetWindow())
+        return;
+    if (village)
+        Tutorial::Tick(0);
+    else
+        LevelOne::Tick(0);
+    glutTimerFunc(16, Tick, 0);
+}
+
+void Shutdown()
+{
+    if (closed)
+        return;
+    closed = true;
+    if (ready)
+        LevelOne::SaveSharedProgress();
+    Tutorial::Shutdown();
+    LevelOne::Shutdown();
 }
 }
 
 int main(int argc, char **argv)
 {
-    const bool tutorial = !(argc > 1 && std::strcmp(argv[1], "--level1") == 0);
+    village = !(argc > 1 && std::strcmp(argv[1], "--level1") == 0);
     glutInit(&argc, argv);
     glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGBA | GLUT_DEPTH);
     glutInitContextVersion(3, 3);
     glutInitContextProfile(GLUT_COMPATIBILITY_PROFILE);
-    glutInitWindowSize(1280, 800);
+    glutInitWindowSize(windowWidth, windowHeight);
     glutCreateWindow("Willowmere");
-    SetWindowTextW(WindowFromDC(wglGetCurrentDC()),
-                   tutorial ? L"윌로미어 - 작은 시작" : L"윌로미어 - 레벨 1 반딧불 사냥터");
     if (glewInit() != GLEW_OK)
+        return 1;
+    // Load saved progression once. Both regions remain alive while travelling.
+    if (!LevelOne::Initialize(windowWidth, windowHeight) ||
+        !Tutorial::Initialize(windowWidth, windowHeight))
     {
-        MessageBoxW(
-            nullptr, L"그래픽 기능을 초기화하지 못했습니다.", L"실행 오류", MB_OK | MB_ICONERROR);
+        MessageBoxW(nullptr, L"지역 초기화에 실패했습니다.", L"실행 오류", MB_OK | MB_ICONERROR);
+        Shutdown();
         return 1;
     }
-    if (!(tutorial ? Tutorial::Initialize(1280, 800) : LevelOne::Initialize(1280, 800)))
-    {
-        MessageBoxW(nullptr,
-                    L"렌더러 초기화에 실패했습니다. OpenGL 3.3 호환 드라이버를 확인하세요.",
-                    L"실행 오류",
-                    MB_OK | MB_ICONERROR);
-        if (tutorial)
-        {
-            Tutorial::Shutdown();
-        }
-        else
-        {
-            LevelOne::Shutdown();
-        }
-        return 1;
-    }
+    Tutorial::Reset();
+    ready = true;
+    SetWindowTextW(WindowFromDC(wglGetCurrentDC()),
+                   village ? L"윌로미어 - 마을 [Tab: 사냥터]" : L"윌로미어 - 사냥터 [Tab: 마을]");
     glutSetOption(GLUT_ACTION_ON_WINDOW_CLOSE, GLUT_ACTION_GLUTMAINLOOP_RETURNS);
-    if (tutorial)
-    {
-        Tutorial::Reset();
-    }
-    glutDisplayFunc(tutorial ? Tutorial::Render : LevelOne::Render);
-    // Rendering no longer waits for the 16 ms gameplay timer.
-    glutIdleFunc(
-        []
-        {
-            if (glutGetWindow() != 0)
-                glutPostRedisplay();
-        });
-    glutReshapeFunc(tutorial ? Tutorial::Resize : LevelOne::Resize);
-    glutKeyboardFunc(tutorial ? Tutorial::KeyDown : LevelOne::KeyDown);
-    glutKeyboardUpFunc(tutorial ? Tutorial::KeyUp : LevelOne::KeyUp);
-    glutVisibilityFunc(tutorial ? TutorialVisibility : LevelVisibility);
-    if (!tutorial)
-    {
-        glutMouseFunc(LevelOne::Mouse);
-    }
-    glutIgnoreKeyRepeat(1);
-    glutCloseFunc(tutorial ? Tutorial::Shutdown : LevelOne::Shutdown);
-    glutTimerFunc(16, tutorial ? Tutorial::Tick : LevelOne::Tick, 0);
-    glutMainLoop();
-    return 0;
+    glutDisplayFunc(Display);
+    glutReshapeFunc(Resize);
+    glutKeyboardFunc(KeyDown);
+    glutKeyboardUpFunc(KeyUp);
+    glutMouseFunc(Mouse);
+    glutVisibilityFunc(Visibility);
     glutIdleFunc(RequestRedraw);
-    glutReshapeFunc(tutorial ? Tutorial::Resize : LevelOne::Resize);
-    glutKeyboardFunc(tutorial ? Tutorial::KeyDown : LevelOne::KeyDown);
-    glutKeyboardUpFunc(tutorial ? Tutorial::KeyUp : LevelOne::KeyUp);
-    glutVisibilityFunc(tutorial ? Tutorial::Visibility : LevelOne::Visibility);
-    if (!tutorial)
-    {
-        glutMouseFunc(LevelOne::Mouse);
-    }
     glutIgnoreKeyRepeat(1);
-    glutCloseFunc(tutorial ? Tutorial::Shutdown : LevelOne::Shutdown);
-    glutTimerFunc(16, tutorial ? Tutorial::Tick : LevelOne::Tick, 0);
+    glutCloseFunc(Shutdown);
+    glutTimerFunc(16, Tick, 0);
     glutMainLoop();
     return 0;
 }

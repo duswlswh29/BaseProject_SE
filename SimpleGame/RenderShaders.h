@@ -85,11 +85,22 @@ void main()
     if (effect == 1)
     {
         float ripple = sin((uv.x + uv.y) * 31.4159 - effectTime * 1.5) * .025;
-        base = vec4(.17 + ripple, .49 + ripple, .65 + ripple, 1.0);
+        base = vec4(.08 + ripple, .30 + ripple, .33 + ripple, 1.0);
     }
     if (textured != 0)
         base *= texture(materialTex, uv * textureRepeat);
-    vec3 lighting = vec3(.40, .45, .51) + vec3(.78, .70, .56) * ndl * mix(.26, 1.0, visibility);
+    if (textured == 1)
+    {
+        // Shared two-world-unit UV scale: organic patches, with block-sized color steps.
+        vec2 ground = floor(uv * textureRepeat * 8.0) / 8.0;
+        float terrainPattern = sin(ground.x * .71 + sin(ground.y * .43) * 2.0)
+                    + cos(ground.y * .83 + sin(ground.x * .37) * 1.7);
+        float dirt = smoothstep(.65, 1.55, terrainPattern);
+        float grain = fract(sin(dot(floor(ground * 8.0), vec2(127.1, 311.7))) * 43758.5453);
+        base.rgb = mix(base.rgb, vec3(.32, .22, .115) * (.8 + grain * .4), dirt * .85);
+        base.rgb *= .83 + .22 * grain;
+    }
+    vec3 lighting = vec3(.24, .30, .32) + vec3(1.02, .86, .61) * ndl * mix(.16, 1.0, visibility);
     result = vec4(base.rgb * (lighting + emission), base.a);
 }
 )GLSL";
@@ -131,7 +142,7 @@ void main()
             bloom += max(texture(scene, uv + vec2(x, y) * texel * 3.0).rgb - vec3(1.0), vec3(0));
     c += bloom * .032;
     c = c / (c + vec3(.75));
-    c = pow(c, vec3(1.0 / 1.9));
+    c = pow(c, vec3(1.0 / 1.65));
     c *= vec3(1.025, 1.005, .98);
     vec2 v = uv * 2.0 - 1.0;
     c *= 1.0 - .11 * dot(v, v);

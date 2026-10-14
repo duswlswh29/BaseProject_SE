@@ -10,7 +10,7 @@
 namespace
 {
 constexpr std::uint32_t CacheMagic = 0x314D5052;
-constexpr std::uint32_t CacheVersion = 1;
+constexpr std::uint32_t CacheVersion = 2;
 
 std::uint32_t Checksum(const void *data, std::size_t length)
 {
@@ -360,9 +360,25 @@ void ModelCache::Generate()
         Ellipsoid(boar, side * .21f, .47f, .71f, .05f, .12f, .06f, .94f, .87f, .65f);
     }
     Mesh &tree = meshes[static_cast<int>(Model::Tree)];
-    Box(tree, 0, .7f, 0, .25f, 1.4f, .25f, .39f, .25f, .13f);
-    Ellipsoid(tree, 0, 1.6f, 0, .65f, .85f, .65f, .25f, .49f, .28f);
-    Ellipsoid(tree, 0, 2.25f, 0, .45f, .6f, .45f, .37f, .60f, .31f);
+    Box(tree, 0, 1.25f, 0, .25f, 2.5f, .25f, .25f, .14f, .07f);
+    // Layered evergreen boughs share one cached mesh and the existing footprint.
+    for (int tier = 0; tier < 5; ++tier)
+    {
+        const float width = 1.3f - tier * .22f;
+        const float height = 1.05f + tier * .37f;
+        const float green = .24f + tier * .018f;
+        Box(tree, 0, height, 0, width, .25f, width * .82f, .10f, green, .13f);
+        Box(tree,
+            .025f,
+            height + .16f,
+            -.025f,
+            width * .72f,
+            .16f,
+            width * .70f,
+            .14f,
+            green + .045f,
+            .16f);
+    }
     Ellipsoid(
         meshes[static_cast<int>(Model::Rock)], 0, .35f, 0, .62f, .43f, .57f, .53f, .56f, .49f);
     Ellipsoid(

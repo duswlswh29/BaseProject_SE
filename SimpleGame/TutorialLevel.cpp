@@ -4,6 +4,7 @@
 #include <sstream>
 #include <locale>
 #include "TutorialLevel.h"
+#include "LevelOne.h"
 #include "Renderer.h"
 #include "SceneGraph.h"
 #include "ModelCache.h"
@@ -168,7 +169,11 @@ struct VillageMonster
 static std::vector<ResidentState> residents;
 static std::vector<VillageMonster> monsters;
 static std::unique_ptr<ModelCache> villageModels;
-static int testHealth = 100, testCoins = 10, testExperience = 0;
+static Rpg::Stats &sharedStats = LevelOne::PlayerStats();
+static int &testHealth = sharedStats.health, &testCoins = sharedStats.coins,
+           &testExperience = sharedStats.experience;
+static bool mouseAttack = false;
+static float sharedSaveTime = 0;
 static float attackWait = 0, hurtWait = 0;
 void ResetPopulation();
 void UpdatePopulation(float dt);
@@ -482,17 +487,57 @@ bool SafeVillage(P p)
     return p.x > -16 && p.x < 16 && p.z > -8 && p.z < 27;
 }
 
-void WalkToward(P &position, P target, float speed, float dt, float &heading)
+float BodyRadius(const P *position)
+{
+    for (const auto &monster : monsters)
+        if (&monster.position == position)
+            return .5f;
+    for (const auto &animal : animals)
+        if (&animal.position == position)
+            return .55f;
+    return .4f;
+}
+
+bool CanStep(const P &from, P next)
+{
+    if (Blocked(next))
+        return false;
+    const float radius = BodyRadius(&from);
+    auto touches = [&](const P &other, float otherRadius)
+    {
+        if (&from == &other)
+            return false;
+        const float limit = radius + otherRadius + .05f;
+        const float oldDistance = Dist(from, other), newDistance = Dist(next, other);
+        // Existing overlaps may move out, but can never move deeper into another body.
+        return newDistance < limit && newDistance <= oldDistance + .00001f;
+    };
+    if (touches(player, .4f))
+        return false;
+    for (const auto &resident : residents)
+        if (touches(resident.position, .4f))
+            return false;
+    for (const auto &monster : monsters)
+        if (monster.health > 0 && touches(monster.position, .5f))
+            return false;
+    for (const auto &animal : animals)
+        if (touches(animal.position, .55f))
+            return false;
+    return true;
+}
+
+void WalkToward(
+    P &position, P target, float speed, float dt, float &heading, float stopDistance = .15f)
 {
     const float distance = Dist(position, target);
-    if (distance < .15f)
+    if (distance <= stopDistance)
         return;
-    const float step = (std::min)(speed * dt, distance);
+    const float step = (std::min)(speed * dt, distance - stopDistance);
     const float dx = (target.x - position.x) / distance * step;
     const float dz = (target.z - position.z) / distance * step;
-    if (!Blocked({position.x + dx, position.z}))
+    if (CanStep(position, {position.x + dx, position.z}))
         position.x += dx;
-    if (!Blocked({position.x, position.z + dz}))
+    if (CanStep(position, {position.x, position.z + dz}))
         position.z += dz;
     heading = std::atan2(dx, dz) * 57.2957795f;
 }
@@ -501,9 +546,7 @@ void ResetPopulation()
 {
     residents.clear();
     monsters.clear();
-    testHealth = 100;
-    testCoins = 10;
-    testExperience = 0;
+
     attackWait = hurtWait = 0;
     static const Behavior patterns[] = {
         Behavior::Investigate, Behavior::Merchant,   Behavior::Study,       Behavior::Work,
@@ -552,10 +595,12 @@ void AttackPopulation()
     for (auto &monster : monsters)
         if (monster.health > 0 && Dist(player, monster.position) < 3)
         {
-            if (--monster.health <= 0)
+            monster.health -= (std::max)(1, sharedStats.Attack() / 10);
+            if (monster.health <= 0)
             {
                 monster.respawn = 12;
-                testExperience += 5;
+                sharedStats.GainExperience(5);
+                ++sharedStats.kills;
                 testCoins += 1;
             }
         }
@@ -574,7 +619,7 @@ void UpdatePopulation(float dt)
     {
         if (hurtWait <= 0)
         {
-            testHealth -= 6;
+            testHealth -= (std::max)(1, 6 - sharedStats.Defense());
             hurtWait = 1;
         }
     };
@@ -598,7 +643,12 @@ void UpdatePopulation(float dt)
                                Dist(player, monster.home) < 9;
             if (chase)
                 target = player;
-            WalkToward(monster.position, target, chase ? 2.2f : .7f, dt, monster.heading);
+            WalkToward(monster.position,
+                       target,
+                       chase ? 2.2f : .7f,
+                       dt,
+                       monster.heading,
+                       chase ? 1.05f : .15f);
             if (chase && Dist(player, monster.position) < 1.1f)
                 hurt();
         }
@@ -645,9 +695,9 @@ void UpdatePopulation(float dt)
                     }
             }
             if (resident.behavior == Behavior::Priest && Dist(player, resident.position) < 3 &&
-                testHealth < 100 && resident.cooldown <= 0)
+                testHealth < sharedStats.MaxHealth() && resident.cooldown <= 0)
             {
-                testHealth = (std::min)(100, testHealth + 10);
+                testHealth = (std::min)(sharedStats.MaxHealth(), testHealth + 10);
                 resident.cooldown = 3;
             }
             if (resident.behavior == Behavior::Helpful && Dist(player, resident.position) < 5 &&
@@ -666,12 +716,17 @@ void UpdatePopulation(float dt)
             if (resident.stun > 0)
                 target = resident.home;
             if (resident.cooldown <= 0 || resident.stun > 0)
-                WalkToward(resident.position, target, 1.2f, dt, resident.heading);
+                WalkToward(resident.position,
+                           target,
+                           1.2f,
+                           dt,
+                           resident.heading,
+                           Dist(target, player) < .1f ? 1.1f : .15f);
         }
     }
     if (testHealth <= 0)
     {
-        testHealth = 100;
+        testHealth = sharedStats.MaxHealth();
         player = {0, 3};
         camera = player;
         hurtWait = 3;
@@ -743,21 +798,21 @@ void Interact()
     resident.cooldown = 3;
     if (resident.behavior == Behavior::Merchant)
     {
-        if (testHealth >= 100)
+        if (testHealth >= sharedStats.MaxHealth())
             Say(n.name, L"이미 건강해 보이네요. 필요할 때 다시 오세요.");
         else if (testCoins < 2)
             Say(n.name, L"동전이 부족하네요. 숲의 몬스터를 물리쳐 보세요.");
         else
         {
             testCoins -= 2;
-            testHealth = (std::min)(100, testHealth + 30);
+            testHealth = (std::min)(sharedStats.MaxHealth(), testHealth + 30);
             Say(n.name, L"회복 물품 거래 완료! 체력 30 회복, 동전 2개 사용.");
         }
         return;
     }
     if (resident.behavior == Behavior::Priest)
     {
-        testHealth = 100;
+        testHealth = sharedStats.MaxHealth();
         Say(n.name, L"편히 쉬세요. 체력을 모두 회복했습니다.");
         return;
     }
@@ -793,6 +848,8 @@ void KeyDown(unsigned char k, int, int)
     if (paused || keys[k])
         return;
     keys[k] = true;
+    if (k == 'q' && dialog.empty())
+        sharedStats.DrinkPotion();
     if (k == 'f' && dialog.empty())
         AttackPopulation();
     if (k == 'e')
@@ -824,6 +881,20 @@ void Visibility(int state)
     }
 }
 
+void Activate()
+{
+    paused = false;
+    mouseAttack = false;
+    std::fill(keys, keys + 256, false);
+    last = glutGet(GLUT_ELAPSED_TIME);
+}
+
+void Mouse(int button, int state, int, int)
+{
+    if (button == GLUT_LEFT_BUTTON)
+        mouseAttack = state == GLUT_DOWN && !paused && dialog.empty();
+}
+
 void Tick(int)
 {
     Profiling::Scope profile("game.update");
@@ -833,6 +904,15 @@ void Tick(int)
     if (!paused)
     {
         time += dt;
+        sharedSaveTime += dt;
+        if (sharedSaveTime >= 15)
+        {
+            sharedSaveTime = 0;
+            LevelOne::SaveSharedProgress();
+        }
+        if (dialog.empty() && (mouseAttack || keys['f'] || keys[' ']) &&
+            !(stage == 2 && Dist(player, stone) < 2))
+            AttackPopulation();
         spell = (std::max)(0.f, spell - dt);
         if (stage < 5)
             elapsed += dt;
@@ -853,10 +933,10 @@ void Tick(int)
                 moving = true;
                 facing = std::atan2(dx, dz) * 180.f / 3.14159265f;
                 P next = {player.x + dx, player.z};
-                if (!Blocked(next))
+                if (CanStep(player, next))
                     player = next;
                 next = {player.x, player.z + dz};
-                if (!Blocked(next))
+                if (CanStep(player, next))
                     player = next;
                 walk += dt * 10;
             }
@@ -880,7 +960,7 @@ void Tick(int)
                 float speed = animal.kind == 1 ? 1.5f : 1.f;
                 P next = {animal.position.x + ax / length * speed * dt,
                           animal.position.z + az / length * speed * dt};
-                if (!Blocked(next))
+                if (CanStep(animal.position, next))
                 {
                     animal.position = next;
                     animal.heading = std::atan2(ax, az) * 180.f / 3.14159265f;
@@ -892,7 +972,6 @@ void Tick(int)
         camera.z += (player.z - camera.z) * b;
     }
     glutPostRedisplay();
-    glutTimerFunc(16, Tick, 0);
 }
 
 void Resize(int width, int height)
@@ -947,16 +1026,19 @@ void Roof(P b)
     glVertex3f(b.x + 1.85f, 1.85f, b.z - 1.65f);
     glEnd();
     renderer->MaterialMode();
-    Color({.85f, .73f, .54f});
+    Color({.56f, .38f, .19f});
+    // The roof reaches y=2.181 at the wall edge, above the original 1.8-high wall.
+    // Fill that band on all four sides before closing the gables against the roof.
+    Box(b.x, 1.98f, b.z, 3, .40f, 2.6f, {.48f, .39f, .25f});
     Renderer::CountedBegin(GL_TRIANGLES);
     glNormal3f(0, 0, 1);
-    glVertex3f(b.x - 1.5f, 1.8f, b.z + 1.3f);
-    glVertex3f(b.x + 1.5f, 1.8f, b.z + 1.3f);
-    glVertex3f(b.x, 3.4f, b.z + 1.3f);
+    glVertex3f(b.x - 1.5f, 2.18f, b.z + 1.3f);
+    glVertex3f(b.x + 1.5f, 2.18f, b.z + 1.3f);
+    glVertex3f(b.x, 3.6f, b.z + 1.3f);
     glNormal3f(0, 0, -1);
-    glVertex3f(b.x + 1.5f, 1.8f, b.z - 1.3f);
-    glVertex3f(b.x - 1.5f, 1.8f, b.z - 1.3f);
-    glVertex3f(b.x, 3.4f, b.z - 1.3f);
+    glVertex3f(b.x + 1.5f, 2.18f, b.z - 1.3f);
+    glVertex3f(b.x - 1.5f, 2.18f, b.z - 1.3f);
+    glVertex3f(b.x, 3.6f, b.z - 1.3f);
     glEnd();
 }
 
@@ -1090,8 +1172,25 @@ void Wildlife(const Animal &a)
 void DrawHouse()
 {
     const P b = {0, 0};
-    Box(b.x, .9f, b.z, 3, 1.8f, 2.6f, {.94f, .84f, .65f});
+    Box(b.x, .9f, b.z, 3, 1.8f, 2.6f, {.48f, .49f, .40f});
     Roof(b);
+    // Facade details stay inside the original house silhouette and collision footprint.
+    Box(0, .16f, 0, 3.02f, .32f, 2.62f, {.32f, .35f, .29f});
+    Box(0, 3.57f, 0, .19f, .16f, 3.32f, {.36f, .22f, .10f});
+    for (int side = -1; side <= 1; side += 2)
+    {
+        Box(side * 1.48f, 1.02f, 0, .13f, 1.70f, 2.62f, {.28f, .17f, .08f});
+        Box(side * 1.84f, 1.87f, 0, .15f, .17f, 3.32f, {.39f, .25f, .12f});
+        for (int end = -1; end <= 1; end += 2)
+        {
+            glPushMatrix();
+            glTranslatef(side * .925f, 2.725f, end * 1.65f);
+            glRotatef(side * 46.6f, 0, 0, 1);
+            Box(0, 0, 0, .16f, 2.55f, .17f, {.42f, .27f, .12f});
+            glPopMatrix();
+        }
+    }
+    Box(0, 2.47f, 1.32f, .14f, 1.18f, .12f, {.28f, .17f, .08f});
     for (int side = -1; side <= 1; side += 2)
     {
         Box(b.x + side * 1.43f, .93f, b.z + 1.34f, .13f, 1.86f, .12f, {.31f, .21f, .14f});
@@ -1142,7 +1241,7 @@ void DrawWater()
         float x = 0 + std::cos(angle) * radius * 4.25f, z = 0 + std::sin(angle) * radius * 3.85f;
         float wave = std::sin(x * 2 + time * 1.4f) * std::cos(z * 2.3f + time) * .025f;
         glNormal3f(-.05f * std::cos(x * 2 + time * 1.4f), 1, -.05f * std::sin(z * 2.3f + time));
-        Color({.15f + radius * .12f, .43f + radius * .16f + wave, .58f + radius * .13f});
+        Color({.08f + radius * .08f, .30f + radius * .10f + wave, .33f + radius * .10f});
         glVertex3f(x, .075f + wave, z);
     };
     for (int ring = 0; ring < rings; ++ring)
@@ -1639,13 +1738,11 @@ void HUD()
          {.67f, .80f, .80f});
     Text(44,
          175,
-         L"마을 테스트 | 주민 32명 | 체력 " + std::to_wstring(testHealth) + L" | 동전 " +
-             std::to_wstring(testCoins) + L" | 경험치 " + std::to_wstring(testExperience));
+         L"마을 | 레벨 " + std::to_wstring(sharedStats.level) + L" | 체력 " +
+             std::to_wstring(testHealth) + L" | 동전 " + std::to_wstring(testCoins) +
+             L" | 경험치 " + std::to_wstring(testExperience));
     Panel(24, 744, 1232, 38);
-    Text(42,
-         772,
-         L"WASD 이동  E 대화·거래·치유  F 공격  스페이스 퀘스트 마법  ESC 일시정지  R 테스트 "
-         L"초기화");
+    Text(42, 772, L"WASD 이동  E 상호작용  좌클릭·스페이스·F 공격  Q 회복약  Tab 사냥터  ESC 정지");
     Panel(1040, 22, 216, 195);
     Text(1055, 50, L"주변 지도", {1, .86f, .55f});
     Text(1055, 78, L"숲길 · 마을 · 야영지");
