@@ -194,6 +194,7 @@ static std::vector<P> trees;
 static bool keys[256] = {}, paused = false;
 // 0 meet, 1 collect, 2 cast, 3 befriend, 4 report, 5 complete.
 static int stage = 0, w = 1280, h = 800, last = 0;
+static bool levelOneTransitionPending = false;
 static float elapsed = 0, time = 0, spell = 0, walk = 0;
 static std::wstring dialog;
 static const wchar_t *speaker = L"";
@@ -424,6 +425,7 @@ void Reset()
     player = {0, 3};
     camera = player;
     stage = 0;
+    levelOneTransitionPending = false;
     elapsed = time = spell = walk = 0;
     paused = false;
     dialog.clear();
@@ -824,6 +826,7 @@ void Interact()
     else if (nearest == 0 && stage == 4)
     {
         stage = 5;
+        levelOneTransitionPending = true;
         Say(n.name, L"새로운 반응을 관찰했구나. 정체는 아직 알 수 없으니 차근차근 조사해 보자.");
     }
     else
@@ -863,6 +866,15 @@ void KeyDown(unsigned char k, int, int)
             Say(L"호숫가 돌", L"빛에 응답한 문양이 깨어났다. 돌 아래에서 작은 울음소리가 들린다…");
         }
     }
+}
+
+bool ConsumeLevelOneTransition()
+{
+    if (!levelOneTransitionPending || !dialog.empty() || paused)
+        return false;
+
+    levelOneTransitionPending = false;
+    return true;
 }
 
 void KeyUp(unsigned char k, int, int)
@@ -1804,13 +1816,13 @@ void HUD()
         Text(44, 675, dialog);
         Text(44, 713, L"[E] 계속");
     }
-    if (stage == 5 && dialog.empty())
+    if (levelOneTransitionPending && dialog.empty())
     {
         Panel(290, 265, 700, 180);
         Text(330, 312, L"튜토리얼 완료", {1, .86f, .55f});
         Text(330, 350, L"역사책이 잊어버린 작은 친구를 만났습니다.");
         Text(330, 387, L"보상: 마법학교 초대장과 배고픈 동행자");
-        Text(330, 424, L"계속 탐험하거나 R로 다시 시작하세요.");
+        Text(330, 424, L"레벨 1 사냥터로 이동합니다.");
     }
     if (paused)
     {

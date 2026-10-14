@@ -48,21 +48,25 @@ void Resize(int w, int h)
         LevelOne::Resize(w, h);
 }
 
+void SwitchRegion(bool toVillage)
+{
+    LevelOne::SaveSharedProgress();
+    village = toVillage;
+    if (village)
+        Tutorial::Activate();
+    else
+        LevelOne::Activate();
+    Resize(windowWidth, windowHeight);
+    SetWindowTextW(WindowFromDC(wglGetCurrentDC()),
+                   village ? L"윌로미어 - 마을 [Tab: 사냥터]" : L"윌로미어 - 사냥터 [Tab: 마을]");
+    RequestRedraw();
+}
+
 void KeyDown(unsigned char key, int x, int y)
 {
     if (key == '\t')
     {
-        LevelOne::SaveSharedProgress();
-        village = !village;
-        if (village)
-            Tutorial::Activate();
-        else
-            LevelOne::Activate();
-        Resize(windowWidth, windowHeight);
-        SetWindowTextW(WindowFromDC(wglGetCurrentDC()),
-                       village ? L"윌로미어 - 마을 [Tab: 사냥터]"
-                               : L"윌로미어 - 사냥터 [Tab: 마을]");
-        RequestRedraw();
+        SwitchRegion(!village);
         return;
     }
     if (village)
@@ -101,7 +105,11 @@ void Tick(int)
     if (closed || !glutGetWindow())
         return;
     if (village)
+    {
         Tutorial::Tick(0);
+        if (Tutorial::ConsumeLevelOneTransition())
+            SwitchRegion(false);
+    }
     else
         LevelOne::Tick(0);
     glutTimerFunc(16, Tick, 0);

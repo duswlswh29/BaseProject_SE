@@ -10,7 +10,7 @@
 namespace
 {
 constexpr std::uint32_t CacheMagic = 0x314D5052;
-constexpr std::uint32_t CacheVersion = 2;
+constexpr std::uint32_t CacheVersion = 3;
 
 std::uint32_t Checksum(const void *data, std::size_t length)
 {
@@ -379,8 +379,31 @@ void ModelCache::Generate()
             green + .045f,
             .16f);
     }
-    Ellipsoid(
-        meshes[static_cast<int>(Model::Rock)], 0, .35f, 0, .62f, .43f, .57f, .53f, .56f, .49f);
+    Mesh &rock = meshes[static_cast<int>(Model::Rock)];
+    // Stepped stone blocks are baked into one mesh, retaining rock batching.
+    for (int y = 0; y < 3; ++y)
+    {
+        for (int z = 0; z < 4; ++z)
+        {
+            for (int x = 0; x < 4; ++x)
+            {
+                if (y == 2 && (x == 0 || z == 3 || (x == 3 && z == 0)))
+                    continue;
+                const float shade = float((x * 13 + z * 7 + y * 11) % 7) * .025f;
+                const bool moss = y == 2 && (x + z) % 3 == 0;
+                Box(rock,
+                    (x - 1.5f) * .29f,
+                    .12f + y * .24f,
+                    (z - 1.5f) * .27f,
+                    .29f,
+                    .24f,
+                    .27f,
+                    (moss ? .27f : .37f) + shade,
+                    (moss ? .38f : .39f) + shade,
+                    (moss ? .19f : .36f) + shade);
+            }
+        }
+    }
     Ellipsoid(
         meshes[static_cast<int>(Model::Crystal)], 0, .24f, 0, .14f, .27f, .14f, .50f, .84f, .96f);
     Mesh &potion = meshes[static_cast<int>(Model::Potion)];

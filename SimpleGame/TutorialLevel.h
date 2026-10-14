@@ -4,6 +4,7 @@ namespace Tutorial
 {
 bool Initialize(int width, int height);
 void Activate();
+bool ConsumeLevelOneTransition();
 void Mouse(int button, int state, int x, int y);
 void Shutdown();
 void Reset();

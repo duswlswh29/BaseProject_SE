@@ -17,10 +17,8 @@ void main()
     vec3 surfaceNormal = gl_Normal;
     if (effect == 1)
     {
-        float a = (local.x + .5) * 6.2831853 + effectTime * 1.4;
-        float b = (local.z + .5) * 6.2831853 + effectTime * .9;
-        local.y += sin(a) * cos(b) * .035;
-        surfaceNormal = normalize(vec3(-cos(a) * cos(b) * .22, 1, sin(a) * sin(b) * .22));
+        // Keep adjacent water tiles flush; animate pixel highlights in the fragment stage.
+        surfaceNormal = vec3(0, 1, 0);
     }
     if (effect == 2)
     {
@@ -84,8 +82,13 @@ void main()
     vec4 base = tint;
     if (effect == 1)
     {
-        float ripple = sin((uv.x + uv.y) * 31.4159 - effectTime * 1.5) * .025;
-        base = vec4(.08 + ripple, .30 + ripple, .33 + ripple, 1.0);
+        vec2 cell = floor(uv * 16.0);
+        float variation = fract(sin(dot(cell, vec2(127.1, 311.7))) * 43758.5453);
+        float wave = sin(cell.x * .67 + cell.y * .91 + effectTime * .85);
+        vec3 waterColor = mix(vec3(.055, .23, .34), vec3(.11, .40, .51), variation);
+        float glint = smoothstep(.91, 1.0, wave) * step(.78, variation);
+        waterColor += vec3(.20, .29, .30) * glint;
+        base = vec4(waterColor, 1.0);
     }
     if (textured != 0)
         base *= texture(materialTex, uv * textureRepeat);
