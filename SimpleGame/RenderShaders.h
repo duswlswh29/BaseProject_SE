@@ -64,6 +64,13 @@ float hashCell(vec3 p)
 {
     return fract(sin(dot(p,vec3(127.1,311.7,74.7)))*43758.5453);
 }
+// Integer hashing avoids sine-hash precision bands across large world coordinates.
+float grassCell(ivec2 cell, uint seed)
+{
+    uint h=uint(cell.x)*0x8da6b343u ^ uint(cell.y)*0xd8163841u ^ seed;
+    h^=h>>16; h*=0x7feb352du; h^=h>>15; h*=0x846ca68bu; h^=h>>16;
+    return float(h & 0x00ffffffu)/16777216.0;
+}
 vec3 materialDetail(vec3 base, int tag, vec3 p, vec3 n)
 {
     vec3 cell=floor(p*32.0);
@@ -141,10 +148,15 @@ void main()
         float broad=sin(p.x*.22+sin(p.y*.19)*2.0)*cos(p.y*.27);
         vec3 darkGrass=vec3(.095,.17,.045);
         vec3 lightGrass=vec3(.23,.30,.085);
-        base.rgb=mix(darkGrass,lightGrass,.3+.40*coarse+.25*(broad*.5+.5));
-        base.rgb*=.75+fine*.50;
-        float blade=step(.77,fine)*step(.45,coarse);
-        base.rgb+=blade*vec3(.035,.045,.008);
+        // Keep the existing soil masks/colors; only replace exposed grass detail.
+        float grassCoarse=grassCell(ivec2(floor(p*1.6)),17u);
+        float grassFine=grassCell(ivec2(pixel),3u);
+        vec3 grass=mix(darkGrass,lightGrass,.3+.40*grassCoarse+.25*(broad*.5+.5));
+        // Fade subpixel detail instead of letting it form woven moire patterns.
+        float footprint=max(length(dFdx(p*8.0)),length(dFdy(p*8.0)));
+        float detail=1.0-smoothstep(.55,1.4,footprint);
+        grass*=1.0+(grassFine-.5)*.22*detail;
+        base.rgb=grass;
         float soilPatch=sin(p.x*.31+sin(p.y*.24)*1.7)*cos(p.y*.23);
         float soil=smoothstep(.45,.85,soilPatch)*step(.33,coarse);
         vec3 dirt=mix(vec3(.14,.095,.048),vec3(.28,.20,.10),fine);
