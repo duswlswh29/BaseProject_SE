@@ -6,6 +6,7 @@
 #include "Dependencies/glew.h"
 #include <map>
 #include <string>
+#include <vector>
 
 // Owns GPU targets, shadow filtering, procedural materials and Korean text.
 // Requires an OpenGL 3.3 compatibility context; destroy before closing it.
@@ -44,6 +45,14 @@ class Renderer
     static void CountedDrawArrays(GLenum mode, GLint first, GLsizei count);
     static void CountToolkitShape();
     void BeginShadow(float cameraX, float cameraZ);
+
+    struct PointLight
+    {
+        float x, y, z, radius;
+        float r = 1.0f, g = .53f, b = .18f;
+    };
+
+    void SetPointLights(const std::vector<PointLight> &lights);
     void BeginScene(float cameraX, float cameraZ);
     void MaterialMode(int material = -1, float emission = 0, float textureRepeat = 1);
     // 0: ordinary mesh, 1: water, 2: flame. Geometry remains cached on the GPU.
@@ -80,4 +89,5 @@ class Renderer
     HFONT font = nullptr;
     HGDIOBJ previousFont = nullptr;
     std::map<std::wstring, Label> labels;
+    std::vector<PointLight> pointLights;
 };

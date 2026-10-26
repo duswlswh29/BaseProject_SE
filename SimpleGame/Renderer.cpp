@@ -181,7 +181,7 @@ void Renderer::ReleaseTargets()
     if (sceneColor)
         glDeleteTextures(1, &sceneColor);
     if (sceneDepth)
-        glDeleteRenderbuffers(1, &sceneDepth);
+        glDeleteTextures(1, &sceneDepth);
     sceneFbo = sceneColor = sceneDepth = 0;
 }
 
@@ -224,13 +224,25 @@ void Renderer::Resize(int w, int h)
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glGenRenderbuffers(1, &sceneDepth);
-    glBindRenderbuffer(GL_RENDERBUFFER, sceneDepth);
-    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, width, height);
+    glGenTextures(1, &sceneDepth);
+    glBindTexture(GL_TEXTURE_2D, sceneDepth);
+    glTexImage2D(GL_TEXTURE_2D,
+                 0,
+                 GL_DEPTH_COMPONENT24,
+                 width,
+                 height,
+                 0,
+                 GL_DEPTH_COMPONENT,
+                 GL_FLOAT,
+                 nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glGenFramebuffers(1, &sceneFbo);
     glBindFramebuffer(GL_FRAMEBUFFER, sceneFbo);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, sceneColor, 0);
-    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, sceneDepth);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, sceneDepth, 0);
     glDrawBuffer(GL_COLOR_ATTACHMENT0);
     glReadBuffer(GL_COLOR_ATTACHMENT0);
     if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
@@ -341,6 +353,11 @@ void Renderer::BeginShadow(float x, float z)
     glGetFloatv(GL_MODELVIEW_MATRIX, lightView);
 }
 
+void Renderer::SetPointLights(const std::vector<PointLight> &lights)
+{
+    pointLights = lights;
+}
+
 void Renderer::BeginScene(float x, float z)
 {
     shadowPass = false;
@@ -377,6 +394,40 @@ void Renderer::BeginScene(float x, float z)
     GLfloat sun[] = {.329f, .819f, .470f, 0};
     glLightfv(GL_LIGHT0, GL_POSITION, sun);
     glUseProgram(worldProgram);
+    float inverseView[16];
+    glPushMatrix();
+    glLoadIdentity();
+    glTranslatef(x, 0, z);
+    glRotatef(-45, 0, 1, 0);
+    glRotatef(-35.264f, 1, 0, 0);
+    glGetFloatv(GL_MODELVIEW_MATRIX, inverseView);
+    glPopMatrix();
+    glUniformMatrix4fv(
+        glGetUniformLocation(worldProgram, "cameraToWorld"), 1, GL_FALSE, inverseView);
+    std::stable_sort(pointLights.begin(),
+                     pointLights.end(),
+                     [x, z](const PointLight &a, const PointLight &b)
+                     {
+                         return (a.x - x) * (a.x - x) + (a.z - z) * (a.z - z) <
+                                (b.x - x) * (b.x - x) + (b.z - z) * (b.z - z);
+                     });
+    const int lightCount = (std::min)(8, static_cast<int>(pointLights.size()));
+    float positions[32] = {}, colors[24] = {};
+    for (int i = 0; i < lightCount; ++i)
+    {
+        const auto &l = pointLights[i];
+        positions[i * 4] = l.x;
+        positions[i * 4 + 1] = l.y;
+        positions[i * 4 + 2] = l.z;
+        positions[i * 4 + 3] = l.radius;
+        colors[i * 3] = l.r;
+        colors[i * 3 + 1] = l.g;
+        colors[i * 3 + 2] = l.b;
+    }
+    glUniform1i(glGetUniformLocation(worldProgram, "pointLightCount"), lightCount);
+    glUniform4fv(glGetUniformLocation(worldProgram, "pointLights"), lightCount, positions);
+    glUniform3fv(glGetUniformLocation(worldProgram, "pointColors"), lightCount, colors);
+    Profiling::Count("render.point_lights", lightCount);
     MaterialMode();
 }
 
@@ -415,7 +466,14 @@ void Renderer::EndScene()
     glBindTexture(GL_TEXTURE_2D, sceneColor);
     glUniform1i(glGetUniformLocation(postProgram, "scene"), 0);
     glUniform2f(glGetUniformLocation(postProgram, "texel"), 1.f / width, 1.f / height);
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, sceneDepth);
+    glUniform1i(glGetUniformLocation(postProgram, "sceneDepth"), 2);
+    glActiveTexture(GL_TEXTURE0);
     Quad();
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glActiveTexture(GL_TEXTURE0);
     glUseProgram(0);
     glBindTexture(GL_TEXTURE_2D, 0);
 }

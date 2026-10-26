@@ -10,7 +10,7 @@
 namespace
 {
 constexpr std::uint32_t CacheMagic = 0x314D5052;
-constexpr std::uint32_t CacheVersion = 4;
+constexpr std::uint32_t CacheVersion = 5;
 
 std::uint32_t Checksum(const void *data, std::size_t length)
 {
@@ -51,16 +51,31 @@ bool ModelCache::Initialize()
     const std::wstring fullPath(executable);
     const std::wstring directory = fullPath.substr(0, fullPath.find_last_of(L"\\/")) + L"\\Cache";
     const std::wstring path = directory + L"\\level1-models.bin";
-    if (Load(path))
+    const bool cached = Load(path);
+    if (cached)
     {
         status = L"모델 캐시 불러오기 완료";
     }
     else
     {
+        for (auto &mesh : meshes)
+            mesh.vertices.clear();
         Generate();
-        CreateDirectoryW(directory.c_str(), nullptr);
-        status = Save(path) ? L"모델 생성·캐시 저장 완료" : L"모델 생성 완료 / 캐시 저장 실패";
     }
+    const std::wstring assets =
+        fullPath.substr(0, fullPath.find_last_of(L"\\/")) + L"\\Assets\\Willowmere\\meshes.bin";
+    // The authored pack is authoritative, including when a procedural cache already exists.
+    if (!LoadAssetPack(assets))
+    {
+        status = L"Willowmere 에셋 파일을 읽지 못했습니다. 프로젝트를 다시 빌드해 주세요.";
+        return false;
+    }
+    if (!cached)
+    {
+        CreateDirectoryW(directory.c_str(), nullptr);
+        Save(path);
+    }
+    status = L"Blender 모듈형 에셋 불러오기 완료";
     for (Mesh &mesh : meshes)
     {
         mesh.count = static_cast<GLsizei>(mesh.vertices.size());
@@ -133,6 +148,41 @@ bool ModelCache::Load(const std::wstring &path)
     return input.peek() == std::char_traits<char>::eof();
 }
 
+bool ModelCache::LoadAssetPack(const std::wstring &path)
+{
+    Profiling::Scope profile("assets.blender_pack_load");
+    std::ifstream input(path.c_str(), std::ios::binary);
+    std::uint32_t header[4] = {};
+    if (!input.read(reinterpret_cast<char *>(header), sizeof(header)) || header[0] != 0x574D4B31 ||
+        header[1] != 1 || header[2] > meshes.size() || header[3] != sizeof(Vertex))
+        return false;
+    std::vector<bool> seen(meshes.size(), false);
+    for (unsigned i = 0; i < header[2]; ++i)
+    {
+        std::uint32_t record[3] = {};
+        if (!input.read(reinterpret_cast<char *>(record), sizeof(record)) ||
+            record[0] >= meshes.size() || seen[record[0]] || record[1] == 0 || record[1] > 150000 ||
+            record[1] % 3 != 0)
+            return false;
+        seen[record[0]] = true;
+        auto &vertices = meshes[record[0]].vertices;
+        vertices.resize(record[1]);
+        const std::size_t bytes = vertices.size() * sizeof(Vertex);
+        if (!input.read(reinterpret_cast<char *>(vertices.data()), bytes) ||
+            Checksum(vertices.data(), bytes) != record[2])
+            return false;
+        for (const auto &vertex : vertices)
+            for (float component : vertex.position)
+                if (!std::isfinite(component) || std::fabs(component) > 10)
+                    return false;
+    }
+    for (std::size_t i = 0; i < meshes.size(); ++i)
+        if (meshes[i].vertices.empty())
+            return false;
+    return seen[static_cast<int>(Model::House)] && seen[static_cast<int>(Model::HeroIdle)] &&
+           input.peek() == std::char_traits<char>::eof();
+}
+
 bool ModelCache::Save(const std::wstring &path) const
 {
     Profiling::Scope profile("io.model_cache_save");
@@ -160,6 +210,12 @@ bool ModelCache::Save(const std::wstring &path) const
 void ModelCache::Draw(Model model) const
 {
     DrawMesh(meshes[static_cast<std::size_t>(model)]);
+}
+
+void ModelCache::DrawAnimated(Model idle, Model firstWalk, float phase, bool moving) const
+{
+    const int frame = (std::max)(0, static_cast<int>(phase * 8)) % 8;
+    Draw(moving ? static_cast<Model>(static_cast<int>(firstWalk) + frame) : idle);
 }
 
 void ModelCache::DrawBatch(Model model, const std::vector<Vector3> &positions, ScenePass pass)
@@ -205,12 +261,21 @@ void ModelCache::DrawBatch(Model model, const std::vector<Vector3> &positions, S
     DrawMesh(batch.mesh);
 }
 
-void ModelCache::DrawMesh(const Mesh &mesh) const
+void ModelCache::DrawTinted(Model model, float r, float g, float b) const
+{
+    glColor3f(r, g, b);
+    DrawMesh(meshes[static_cast<int>(model)], false);
+}
+
+void ModelCache::DrawMesh(const Mesh &mesh, bool vertexColors) const
 {
     glBindBuffer(GL_ARRAY_BUFFER, mesh.buffer);
     glEnableClientState(GL_VERTEX_ARRAY);
     glEnableClientState(GL_NORMAL_ARRAY);
-    glEnableClientState(GL_COLOR_ARRAY);
+    if (vertexColors)
+        glEnableClientState(GL_COLOR_ARRAY);
+    else
+        glDisableClientState(GL_COLOR_ARRAY);
     glClientActiveTexture(GL_TEXTURE0);
     glEnableClientState(GL_TEXTURE_COORD_ARRAY);
     glVertexPointer(

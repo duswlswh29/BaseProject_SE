@@ -11,14 +11,14 @@ table{width:100%;border-collapse:collapse;background:#17262d}th,td{text-align:le
 th{color:#a5d9bd}section{overflow:auto}canvas{background:#233b35;max-width:100%;height:auto;border-radius:12px}small{color:#aebcb6}a{color:#8fe1bc}
 </style>
 <main><h1>윌로미어 · 마을 모니터</h1><div id="status" role="status">연결 중…</div>
-<p>게임 상태를 1초마다 JSON으로 수신합니다. 외곽은 별도 마을이 아닌 현재 맵의 관찰 구역입니다.</p>
+<p>게임 상태를 1초마다 JSON으로 수신합니다. 5개 마을의 소속 주민과 현재 위치를 구분합니다. 소문은 이동한 NPC가 가까이 만났을 때만 전달됩니다.</p>
 <div class="cards" id="totals"></div><div class="cards" id="regions"></div>
 <canvas id="map" width="1100" height="360" aria-label="NPC 및 몬스터 위치"></canvas>
 <p>● 주민 · 빨강: 살아 있는 몬스터 / 위치도는 지형을 표시하지 않습니다.</p>
 <div class="controls"><input id="search" placeholder="NPC 이름·역할·상태 검색" aria-label="NPC 검색">
 <select id="region" aria-label="구역"><option value="">전체 구역</option></select>
 <button id="download">현재 JSON 저장</button><a href="/api/state" target="_blank">JSON 원문</a></div>
-<section><table><thead><tr><th>NPC</th><th>역할</th><th>현재 상태</th><th>구역</th><th>좌표 X / Z</th><th>대기 / 후퇴(초)</th></tr></thead><tbody id="npcs"></tbody></table></section>
+<section><table><thead><tr><th>NPC</th><th>역할</th><th>현재 상태</th><th>현재 / 소속 마을</th><th>좌표 X / Z</th><th>대기 / 후퇴(초)</th><th>소문 / 이동 목적지</th></tr></thead><tbody id="npcs"></tbody></table></section>
 <p id="source"></p><small>이동 상태는 최근 두 스냅샷의 위치 차이로 판정합니다. 응답이 오래되면 마지막 값이므로 실시간으로 해석하지 마세요.</small>
 </main><script>
 let current=null, latest=null;
@@ -30,10 +30,13 @@ function render(){
  card(el('totals'),'전체 NPC\n'+d.npcs.length+'명');
  card(el('totals'),'살아 있는 몬스터\n'+d.monsters.filter(m=>m.health>0).length+' / '+d.monsters.length);
  card(el('totals'),'게임\n'+(d.paused?'일시정지':d.dialogue_open?'대화 중':'진행 중'));
+ card(el('totals'),'소문 전달 누적\n'+(d.rumor_transfers_total??0)+'회');
  card(el('totals'),'상태 기록\n오류 '+d.writer.errors_total+' · 누락 '+d.writer.dropped_total);
  el('regions').replaceChildren();
- for(const r of d.regions)card(el('regions'),r.name+'\nNPC '+r.npc_count+' · 산적 '+r.hostile_npc_count+
- '\n몬스터 '+r.monsters_alive+' · 재생성 대기 '+r.monsters_respawning);
+ for(const r of d.regions)card(el('regions'),r.name+'\n소속 '+(r.resident_count??r.npc_count)+'명 · 현재 구역 '+r.npc_count+'명'+
+ '\n몬스터 '+r.monsters_alive+' · 재생성 대기 '+r.monsters_respawning+
+ '\n분위기 '+(r.mood??'미집계')+' · 안전 '+(r.safety_score??'-')+'/100 · 호기심 '+(r.curiosity_score??'-')+'/100'+
+ '\n소문을 아는 소속 주민 '+(r.rumor_informed_residents??0)+'명');
  const names=new Map(d.regions.map(r=>[r.id,r.name]));
  const key=el('search').value.toLowerCase(), area=el('region').value;
  el('npcs').replaceChildren();
@@ -41,13 +44,16 @@ function render(){
  if(area!==''&&String(n.region)!==area)continue;
  if(!(n.name+' '+n.role+' '+n.state).toLowerCase().includes(key))continue;
  const tr=document.createElement('tr');
- for(const v of [n.name,n.role,n.state,names.get(n.region),n.x.toFixed(1)+' / '+n.z.toFixed(1),
- n.cooldown_seconds.toFixed(1)+' / '+n.stun_seconds.toFixed(1)]){
+ const known=d.regions.filter(r=>((n.rumor_mask??0)&(1<<r.id))!==0).map(r=>r.name).join(', ')||'없음';
+ for(const v of [n.name,n.role,n.state,names.get(n.region)+' / '+(names.get(n.home_village)??'-'),n.x.toFixed(1)+' / '+n.z.toFixed(1),
+ n.cooldown_seconds.toFixed(1)+' / '+n.stun_seconds.toFixed(1),known+(n.courier?' → '+names.get(n.destination_village):'')]){
  const td=document.createElement('td');td.textContent=v;tr.append(td)}
  el('npcs').append(tr);
  }
  const c=el('map'),ctx=c.getContext('2d');ctx.clearRect(0,0,c.width,c.height);
- function dot(p,color,size){ctx.fillStyle=color;ctx.beginPath();ctx.arc((p.x+56)/112*c.width,(p.z+52)/104*c.height,size,0,Math.PI*2);ctx.fill()}
+ const b=d.map_bounds??{min_x:-56,max_x:56,min_z:-52,max_z:52};
+ function dot(p,color,size){ctx.fillStyle=color;ctx.beginPath();ctx.arc((p.x-b.min_x)/(b.max_x-b.min_x)*c.width,(p.z-b.min_z)/(b.max_z-b.min_z)*c.height,size,0,Math.PI*2);ctx.fill()}
+ for(const r of d.regions)if(r.center_x!==undefined){dot({x:r.center_x,z:r.center_z},'#385950',16);ctx.fillStyle='#ffffff';ctx.fillText(r.name,(r.center_x-b.min_x)/(b.max_x-b.min_x)*c.width+10,(r.center_z-b.min_z)/(b.max_z-b.min_z)*c.height-10)}
  for(const m of d.monsters)if(m.health>0)dot(m,'#ed827b',3);
  for(const n of d.npcs)dot(n,'#ffe0a3',4);
 }

@@ -28,6 +28,63 @@ enum class Model
     Flame,
     Camp,
     GrassTuft,
+    HeroIdle,
+    MerchantIdle,
+    Merchant0,
+    Merchant1,
+    Merchant2,
+    Merchant3,
+    Merchant4,
+    Merchant5,
+    Merchant6,
+    Merchant7,
+    HealerIdle,
+    Healer0,
+    Healer1,
+    Healer2,
+    Healer3,
+    Healer4,
+    Healer5,
+    Healer6,
+    Healer7,
+    DeerIdle,
+    Deer0,
+    Deer1,
+    Deer2,
+    Deer3,
+    Deer4,
+    Deer5,
+    Deer6,
+    Deer7,
+    CatIdle,
+    Cat0,
+    Cat1,
+    Cat2,
+    Cat3,
+    Cat4,
+    Cat5,
+    Cat6,
+    Cat7,
+    WolfIdle,
+    Wolf0,
+    Wolf1,
+    Wolf2,
+    Wolf3,
+    Wolf4,
+    Wolf5,
+    Wolf6,
+    Wolf7,
+    House,
+    Table,
+    Stool,
+    Chest,
+    Barrel,
+    Lantern,
+    Broadleaf,
+    WoodBlock,
+    StoneBlock,
+    LeafCluster,
+    Garden,
     Count
 };
 
@@ -43,6 +100,8 @@ class ModelCache
     void DrawBatch(Model model, const std::vector<Vector3> &positions, ScenePass pass);
     const ActorBounds &Bounds(Model model) const;
     const std::wstring &Status() const;
+    void DrawAnimated(Model idle, Model firstWalk, float phase, bool moving) const;
+    void DrawTinted(Model model, float r, float g, float b) const;
 
   private:
     struct Vertex
@@ -62,7 +121,7 @@ class ModelCache
     };
 
     void Generate();
-    void DrawMesh(const Mesh &mesh) const;
+    void DrawMesh(const Mesh &mesh, bool vertexColors = true) const;
 
     struct Batch
     {
@@ -72,6 +131,7 @@ class ModelCache
 
     std::array<Batch, 4> batches;
     bool Load(const std::wstring &path);
+    bool LoadAssetPack(const std::wstring &path);
     bool Save(const std::wstring &path) const;
     void Box(Mesh &mesh,
              float x,

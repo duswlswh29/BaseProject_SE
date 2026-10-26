@@ -1,0 +1,20 @@
+{
+  "fps": 30,
+  "root_motion": {"Walk": "in_place", "Run": "in_place", "TurnLeft": "yaw_minus_90_degrees", "TurnRight": "yaw_plus_90_degrees", "Jump": "vertical_only"},
+  "reference_pose": "Reference: rest pose, neutral arms down. Use for retargeting and rotation offsets, not as a locomotion transition.",
+  "rotation_interpolation": "Use shortest-path quaternion slerp for runtime pose blending; convert source Euler keys during import.",
+  "transitions": [
+    {"from": "Idle", "to": "Walk", "blend_seconds": 0.18},
+    {"from": "Walk", "to": "Idle", "blend_seconds": 0.20},
+    {"from": "Walk", "to": "Run", "blend_seconds": 0.24, "sync": "preserve normalized cycle phase; quadruped walk-to-bound requires foot-contact review"},
+    {"from": "Run", "to": "Walk", "blend_seconds": 0.28, "sync": "preserve normalized cycle phase"},
+    {"from": "Idle", "to": "TurnLeft|TurnRight", "blend_seconds": 0.12},
+    {"from": "TurnLeft|TurnRight", "to": "Idle", "blend_seconds": 0.16, "rule": "commit extracted root yaw to actor orientation before blending"},
+    {"from": "Idle|Walk|Run", "to": "Attack", "blend_seconds": 0.10},
+    {"from": "Attack", "to": "Idle|Walk|Run", "blend_seconds": 0.18},
+    {"from": "Idle|Walk|Run", "to": "Jump", "blend_seconds": 0.08},
+    {"from": "Jump", "to": "Idle|Walk|Run", "blend_seconds": 0.16, "rule": "transition on grounded event; use one source of vertical motion"}
+  ],
+  "loop_rule": "First and last key are matching endpoints; omit duplicate final sample at runtime.",
+  "notes": ["Blend durations are starting values, not tested gameplay tuning.", "No AI, hit detection, movement, collision or game code is included."]
+}

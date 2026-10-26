@@ -37,7 +37,7 @@ struct NPC
     C color;
 };
 
-static const NPC villagers[] = {
+static const NPC npcTemplates[] = {
     {0, 0, L"미라 교수", L"숲의 빛씨앗을 찾아오렴. 과제는 먹으면 안 된단다.", {.5f, .35f, .7f}},
     {-2, 4, L"제빵사 핍", L"빵이 또 날아갔어. 오늘도 매출보다 빵이 잘 오르네.", {.8f, .45f, .3f}},
     {2, 6, L"학생 리오", L"WASD로 걸어 봐! 나는 첫날 마을을 움직이려 했어.", {.3f, .5f, .7f}},
@@ -98,12 +98,36 @@ static const NPC villagers[] = {
     {-7, 21, L"도서관 견습생", L"같은 기록도 관찰한 사실과 대조해야죠.", {.35f, .5f, .8f}},
     {7, 25, L"장치 수리 견습생", L"고장난 장치 앞에서는 일단 멈추고 살펴봅니다.", {.8f, .5f, .2f}},
     {0, 19, L"친절한 길잡이", L"마을 밖 사냥터에서는 F로 방어 마법을 쓰세요.", {.4f, .75f, .5f}}};
-static const int npcCount = sizeof(villagers) / sizeof(villagers[0]);
-static const P houses[] = {{-5, 3},   {5, 4},    {-5, 8},    {5, 9},     {-6, 15},   {6, 19},
-                           {-13, 8},  {13, 11},  {-46, -22}, {-39, -34}, {-30, -30}, {-20, -36},
-                           {-8, -40}, {3, -35},  {20, -31},  {33, -26},  {43, -20},  {45, -4},
-                           {40, 7},   {42, 23},  {29, 39},   {18, 37},   {2, 39},    {-9, 31},
-                           {-26, 32}, {-36, 18}, {-44, 12},  {-25, 0}};
+constexpr int VillageCount = 5;
+constexpr int ResidentsPerVillage = 20;
+constexpr int npcCount = VillageCount * ResidentsPerVillage;
+constexpr float PlayerSpeed = 3.2f;
+constexpr float VillageSpacing = 40.f;
+constexpr float MapMinX = -30, MapMaxX = 190, MapMinZ = -40, MapMaxZ = 40;
+static const wchar_t *villageNames[] = {L"윌로미어", L"솔바람", L"호수빛", L"돌나루", L"새벽숲"};
+static std::vector<NPC> villagers;
+static std::wstring residentNames[npcCount];
+static std::vector<P> houses;
+
+struct StreetLamp
+{
+    P position;
+    float heading;
+};
+
+static std::vector<StreetLamp> streetLamps;
+static float rumorClock = 0;
+static unsigned rumorTransfers = 0;
+
+P VillageCenter(int id)
+{
+    return {id * VillageSpacing, 0};
+}
+
+int NearestVillage(P p)
+{
+    return (std::max)(0, (std::min)(VillageCount - 1, int(std::floor(p.x / VillageSpacing + .5f))));
+}
 
 struct Pond
 {
@@ -112,7 +136,7 @@ struct Pond
 };
 
 static const Pond ponds[] = {
-    {{-24, -43}, 5, 3.2f}, {{15, -40}, 5.8f, 3.8f}, {{47, 34}, 4.5f, 5}, {{-23, 20}, 5.5f, 3.6f}};
+    {{22, 30}, 5, 3.2f}, {{62, -30}, 5.8f, 3.8f}, {{102, 32}, 4.5f, 5}, {{146, -28}, 5.5f, 3.6f}};
 static std::vector<P> shrubs, rocks;
 
 bool InPond(P p, float margin = 0)
@@ -156,6 +180,12 @@ struct ResidentState
     Behavior behavior = Behavior::Work;
     float heading = 0, cooldown = 0, stun = 0;
     ActorId actor = 0;
+    int homeVillage = 0, destination = 0, routePhase = 0, direction = 1;
+    bool courier = false;
+    bool walking = false;
+    float visitWait = 5;
+    unsigned rumors = 0;
+    P lastExchange = {0, 0};
 };
 
 struct VillageMonster
@@ -212,33 +242,28 @@ void Color(C c)
 
 void Box(float x, float y, float z, float a, float b, float c, C color)
 {
-    Color(color);
     glPushMatrix();
     glTranslatef(x, y, z);
     glScalef(a, b, c);
-    Renderer::CountToolkitShape();
-    glutSolidCube(1);
+    villageModels->DrawTinted(Model::WoodBlock, color.r, color.g, color.b);
     glPopMatrix();
 }
 
 void Ball(float x, float y, float z, float r, C c)
 {
-    Color(c);
     glPushMatrix();
     glTranslatef(x, y, z);
-    Renderer::CountToolkitShape();
-    glutSolidSphere(r, 10, 8);
+    glScalef(r * 2, r * 2, r * 2);
+    villageModels->DrawTinted(Model::LeafCluster, c.r, c.g, c.b);
     glPopMatrix();
 }
 
 void Cone(float x, float y, float z, float r, float height, C c)
 {
-    Color(c);
     glPushMatrix();
-    glTranslatef(x, y, z);
-    glRotatef(-90, 1, 0, 0);
-    Renderer::CountToolkitShape();
-    glutSolidCone(r, height, 8, 1);
+    glTranslatef(x, y + height * .5f, z);
+    glScalef(r * 2, height, r * 2);
+    villageModels->DrawTinted(Model::LeafCluster, c.r, c.g, c.b);
     glPopMatrix();
 }
 
@@ -286,7 +311,7 @@ struct Trail
     float width;
 };
 
-static const Trail trails[] = {
+static const Trail localTrails[] = {
     {{0, 3}, {0, -3}, 2.4f},        {{0, -3}, {-8, -3}, 2.2f},   {{-8, -3}, {-8, -6}, 2.2f},
     {{-8, -6}, {-17, -12}, 2.8f},   {{-17, -12}, {-24, -18}, 3}, {{-24, -18}, {-36, -27}, 3},
     {{-36, -27}, {-42, -12}, 2.5f}, {{-42, -12}, {-32, 5}, 3},   {{-32, 5}, {-12, 12}, 3},
@@ -294,6 +319,59 @@ static const Trail trails[] = {
     {{0, 22}, {8, 29}, 3},          {{8, 29}, {24, 32}, 3},      {{24, 32}, {36, 16}, 3},
     {{36, 16}, {32, 1}, 3},         {{32, 1}, {25, -19}, 3},     {{25, -19}, {15, -12}, 2.8f},
     {{15, -12}, {4, -10}, 2.5f},    {{4, -10}, {4, -4}, 2.2f},   {{4, -4}, {0, -3}, 2.2f}};
+static std::vector<Trail> trails;
+
+void ConfigureVillages()
+{
+    villagers.clear();
+    houses.clear();
+    trails.clear();
+    rumorClock = 0;
+    rumorTransfers = 0;
+    const P houseOffsets[] = {
+        {-5, 3}, {5, 4}, {-5, 8}, {5, 9}, {-6, 15}, {6, 19}, {-13, 8}, {13, 11}};
+    for (const Trail &trail : localTrails)
+        if (trail.a.x >= -17 && trail.a.x <= 17 && trail.b.x >= -17 && trail.b.x <= 17)
+            trails.push_back(trail);
+    for (int v = 0; v < VillageCount; ++v)
+    {
+        P c = VillageCenter(v);
+        trails.push_back({{c.x, 0}, {c.x, -12}, 3});
+        trails.push_back({{c.x, -12}, {c.x + (v < 4 ? VillageSpacing : -VillageSpacing), -12}, 3});
+        trails.push_back({{c.x, 0}, {c.x, 23}, 3});
+        for (P h : houseOffsets)
+        {
+            houses.push_back({c.x + h.x, h.z});
+            trails.push_back({{c.x + h.x, h.z + 2.2f}, {c.x, h.z + 2.2f}, 2});
+        }
+        for (int j = 0; j < ResidentsPerVillage; ++j)
+        {
+            int i = v * ResidentsPerVillage + j;
+            NPC n = npcTemplates[j];
+            if (v == 0)
+            {
+                n.x = npcTemplates[j].x;
+                n.z = npcTemplates[j].z;
+            }
+            else
+            {
+                float a = j * 2.399963f, radius = 2.5f + (j % 4) * 1.3f;
+                n.x = c.x + std::cos(a) * radius;
+                n.z = std::sin(a) * radius;
+            }
+            if (j == 1 || j == 2)
+            {
+                n.x = c.x + (j == 1 ? -1.f : 1.f);
+                n.z = -2;
+            }
+            residentNames[i] =
+                v == 0 ? std::wstring(n.name) : std::wstring(villageNames[v]) + L" " + n.name;
+            n.name = residentNames[i].c_str();
+            villagers.push_back(n);
+        }
+    }
+}
+
 static const P clearings[] = {{-24, -18}, {25, -19}, {-36, -27}, {-32, 5}, {24, 32}, {36, 16}};
 static std::vector<P> trailTiles;
 
@@ -310,27 +388,6 @@ bool OnTrail(P p, float margin = 0)
     for (const auto &trail : trails)
         if (SegmentDistance(p, trail) < trail.width * .5f + margin)
             return true;
-    for (std::size_t i = 8; i < sizeof(houses) / sizeof(houses[0]); ++i)
-    {
-        const P door = {houses[i].x, houses[i].z + 2.2f};
-        P junction = trails[0].a;
-        float best = 10000;
-        for (const auto &trail : trails)
-        {
-            float dx = trail.b.x - trail.a.x, dz = trail.b.z - trail.a.z;
-            float t = ((door.x - trail.a.x) * dx + (door.z - trail.a.z) * dz) / (dx * dx + dz * dz);
-            t = (std::max)(0.f, (std::min)(1.f, t));
-            P candidate = {trail.a.x + dx * t, trail.a.z + dz * t};
-            float d = Dist(door, candidate);
-            if (d < best)
-            {
-                best = d;
-                junction = candidate;
-            }
-        }
-        if (best > .01f && SegmentDistance(p, {door, junction, 2}) < 1 + margin)
-            return true;
-    }
     return false;
 }
 
@@ -340,8 +397,8 @@ void BuildLandscape()
     trees.clear();
     trailTiles.clear();
     // Bake path coverage once; render and map share this layout.
-    for (int x = -112; x < 112; ++x)
-        for (int z = -104; z < 104; ++z)
+    for (int x = int(MapMinX * 2); x < int(MapMaxX * 2); ++x)
+        for (int z = int(MapMinZ * 2); z < int(MapMaxZ * 2); ++z)
         {
             P p = {x * .5f + .25f, z * .5f + .25f};
             bool open = !InPond(p, .6f);
@@ -356,27 +413,21 @@ void BuildLandscape()
         }
     std::mt19937 random(20261012);
     std::uniform_real_distribution<float> unit(0.f, 1.f);
-    const P groves[] = {{-44, -35},
-                        {-30, -39},
-                        {-13, -27},
-                        {7, -30},
-                        {35, -34},
-                        {45, -12},
-                        {45, 12},
-                        {36, 38},
-                        {12, 43},
-                        {-13, 37},
-                        {-38, 28},
-                        {-46, 3}};
+    std::vector<P> groves;
+    for (int v = 0; v < VillageCount; ++v)
+        for (float z : {-30.f, 30.f})
+            for (float x : {-16.f, 16.f})
+                groves.push_back({v * VillageSpacing + x, z});
     for (P grove : groves)
         for (int attempt = 0, placed = 0; attempt < 300 && placed < 24; ++attempt)
         {
             float angle = unit(random) * 6.2831853f;
             float radius = std::sqrt(unit(random)) * 10;
             P p = {grove.x + std::cos(angle) * radius, grove.z + std::sin(angle) * radius * .85f};
-            if (std::fabs(p.x) > 54 || std::fabs(p.z) > 50 || OnTrail(p, 1.6f))
+            if (p.x < MapMinX + 2 || p.x > MapMaxX - 2 || p.z < MapMinZ + 2 || p.z > MapMaxZ - 2 ||
+                OnTrail(p, 1.6f))
                 continue;
-            if (p.x > -17 && p.x < 18 && p.z > -10 && p.z < 28)
+            if (std::fabs(p.x - VillageCenter(NearestVillage(p)).x) < 17 && p.z > -10 && p.z < 25)
                 continue;
             bool open = Dist(p, seed) > 4 && Dist(p, {9, -4}) > 8 && !InPond(p, 1);
             for (P clearing : clearings)
@@ -397,9 +448,10 @@ void BuildLandscape()
     shrubs.clear();
     rocks.clear();
     // Irregular small props break up the open ground without blocking routes.
-    for (int attempt = 0; attempt < 4000 && shrubs.size() < 520; ++attempt)
+    for (int attempt = 0; attempt < 10000 && shrubs.size() < 1000; ++attempt)
     {
-        P p = {unit(random) * 108 - 54, unit(random) * 100 - 50};
+        P p = {MapMinX + unit(random) * (MapMaxX - MapMinX),
+               MapMinZ + unit(random) * (MapMaxZ - MapMinZ)};
         if (OnTrail(p, .7f) || InPond(p, 1) || Dist(p, {9, -4}) < 6)
             continue;
         bool open = Dist(p, seed) > 2 && Dist(p, stone) > 2;
@@ -430,6 +482,7 @@ void Reset()
     paused = false;
     dialog.clear();
     std::fill(keys, keys + 256, false);
+    ConfigureVillages();
     BuildLandscape();
     animals.clear();
     for (int i = 0; i < 12; ++i)
@@ -449,7 +502,7 @@ void Reset()
 
 bool Blocked(P p)
 {
-    if (p.x < -56 || p.x > 56 || p.z < -52 || p.z > 52)
+    if (p.x < MapMinX || p.x > MapMaxX || p.z < MapMinZ || p.z > MapMaxZ)
         return true;
     if (InPond(p, .35f))
         return true;
@@ -486,7 +539,7 @@ P FindFree(P desired)
 
 bool SafeVillage(P p)
 {
-    return p.x > -16 && p.x < 16 && p.z > -8 && p.z < 27;
+    return std::fabs(p.x - VillageCenter(NearestVillage(p)).x) < 16 && p.z > -8 && p.z < 27;
 }
 
 float BodyRadius(const P *position)
@@ -544,6 +597,37 @@ void WalkToward(
     heading = std::atan2(dx, dz) * 57.2957795f;
 }
 
+P FindMonsterSpawn(P oldPosition)
+{
+    static std::mt19937 rng(20261022);
+    std::uniform_real_distribution<float> unit(0, 1);
+    for (int attempt = 0; attempt < 2048; ++attempt)
+    {
+        int gap = int(rng() % 4);
+        P p = {gap * VillageSpacing + 17 + unit(rng) * 6,
+               MapMinZ + 3 + unit(rng) * (MapMaxZ - MapMinZ - 6)};
+        if (Blocked(p) || SafeVillage(p) || OnTrail(p, 1.5f) || Dist(p, player) < 12 ||
+            Dist(p, oldPosition) < 10)
+            continue;
+        bool free = true;
+        for (const auto &r : residents)
+            if (Dist(r.position, p) < 2)
+            {
+                free = false;
+                break;
+            }
+        for (const auto &m : monsters)
+            if (m.health > 0 && Dist(m.position, p) < 1.5f)
+            {
+                free = false;
+                break;
+            }
+        if (free)
+            return p;
+    }
+    return oldPosition; // Retry later rather than spawning inside a character or obstacle.
+}
+
 void ResetPopulation()
 {
     residents.clear();
@@ -559,31 +643,34 @@ void ResetPopulation()
         Behavior::Priest,      Behavior::Helpful,    Behavior::Helpful,     Behavior::Guard,
         Behavior::Guard,       Behavior::Bandit,     Behavior::Bandit,      Behavior::Bully,
         Behavior::Bully,       Behavior::Study,      Behavior::Experiment,  Behavior::Helpful};
-    static_assert(sizeof(patterns) / sizeof(patterns[0]) == npcCount, "NPC pattern count");
+
     for (int i = 0; i < npcCount; ++i)
     {
         ResidentState state;
         state.home = state.position = FindFree({villagers[i].x, villagers[i].z});
-        state.behavior = patterns[i];
+        state.behavior = patterns[i % ResidentsPerVillage];
+        state.homeVillage = i / ResidentsPerVillage;
+        state.courier = i % ResidentsPerVillage == 1 || i % ResidentsPerVillage == 2;
+        state.direction = state.homeVillage == 4 ? -1 : 1;
+        state.destination = state.homeVillage;
+        state.visitWait = 5 + float(i % 3);
+        state.rumors = i % ResidentsPerVillage == 0 ? (1u << state.homeVillage) : 0;
+        state.lastExchange = state.position;
         residents.push_back(state);
     }
-    // Stable spawn layout; outer forest has ample encounters without invading quest space.
-    for (int attempt = 0; attempt < 1024 && monsters.size() < 64; ++attempt)
+    for (int i = 0; i < 100; ++i)
     {
-        const float angle = attempt * 2.399963f;
-        const float radius = 19.f + (attempt % 5) * 7.f;
-        P p = FindFree({std::cos(angle) * radius, std::sin(angle) * radius});
-        if (SafeVillage(p) || Dist(p, seed) < 6 || Dist(p, stone) < 6)
-            continue;
-        bool spaced = true;
-        for (const auto &monster : monsters)
-            if (Dist(p, monster.home) < 3)
-                spaced = false;
-        if (!spaced)
-            continue;
         VillageMonster monster;
-        monster.home = monster.position = p;
-        monster.kind = int(monsters.size()) % 2;
+        monster.kind = i % 2;
+        P spawn = FindMonsterSpawn({-1000, -1000});
+        if (spawn.x < MapMinX)
+        {
+            // Keep a dormant slot and retry; never place a live monster out of bounds.
+            monster.health = 0;
+            monster.respawn = .5f;
+            spawn = {20, -20};
+        }
+        monster.home = monster.position = spawn;
         monsters.push_back(monster);
     }
 }
@@ -600,7 +687,7 @@ void AttackPopulation()
             monster.health -= (std::max)(1, sharedStats.Attack() / 10);
             if (monster.health <= 0)
             {
-                monster.respawn = 12;
+                monster.respawn = 2;
                 sharedStats.GainExperience(5);
                 ++sharedStats.kills;
                 testCoins += 1;
@@ -632,10 +719,16 @@ void UpdatePopulation(float dt)
             if (monster.health <= 0)
             {
                 monster.respawn -= dt;
-                if (monster.respawn <= 0 && Dist(player, monster.home) > 5)
+                if (monster.respawn <= 0)
                 {
-                    monster.position = monster.home;
-                    monster.health = 3;
+                    P spawn = FindMonsterSpawn(monster.position);
+                    if (Dist(spawn, monster.position) >= 10)
+                    {
+                        monster.home = monster.position = spawn;
+                        monster.health = 3;
+                    }
+                    else
+                        monster.respawn = .5f;
                 }
                 continue;
             }
@@ -660,10 +753,61 @@ void UpdatePopulation(float dt)
         for (std::size_t i = 0; i < residents.size(); ++i)
         {
             auto &resident = residents[i];
+            const P previousPosition = resident.position;
+            resident.walking = false;
             resident.cooldown = (std::max)(0.f, resident.cooldown - dt);
             resident.stun = (std::max)(0.f, resident.stun - dt);
             if (i == 0)
                 continue; // Original quest giver stays reachable.
+            if (resident.courier)
+            {
+                if (resident.visitWait > 0)
+                {
+                    resident.visitWait -= dt;
+                    if (resident.visitWait <= 0)
+                    {
+                        if (resident.destination == 4)
+                            resident.direction = -1;
+                        if (resident.destination == 0)
+                            resident.direction = 1;
+                        resident.routePhase = 0;
+                    }
+                }
+                else
+                {
+                    const float lane = -12.f + (i % 2 ? -.4f : .4f);
+                    P destination = VillageCenter(resident.destination);
+                    destination.x += i % 2 ? -.9f : .9f;
+                    P next = resident.routePhase == 0   ? P{destination.x, lane}
+                             : resident.routePhase == 1 ? P{destination.x, lane}
+                                                        : P{destination.x, -2};
+                    P before = resident.position;
+                    WalkToward(resident.position, next, 2.4f, dt, resident.heading, .35f);
+                    if (Dist(before, resident.position) < .001f && Dist(before, next) > .65f)
+                    {
+                        P detour = {before.x + (i % 2 ? -dt : dt), before.z};
+                        if (CanStep(resident.position, detour))
+                            resident.position = detour;
+                    }
+                    if (Dist(resident.position, next) < .65f)
+                    {
+                        if (resident.routePhase == 0)
+                        {
+                            resident.destination += resident.direction;
+                            resident.routePhase = 1;
+                        }
+                        else if (resident.routePhase == 1)
+                            resident.routePhase = 2;
+                        else
+                        {
+                            resident.visitWait = 12;
+                            resident.routePhase = 0;
+                        }
+                    }
+                }
+                resident.walking = Dist(previousPosition, resident.position) > .0001f;
+                continue;
+            }
             P target = resident.home;
             const float phase = time * .22f + float(i);
             if (resident.behavior == Behavior::Merchant)
@@ -691,7 +835,7 @@ void UpdatePopulation(float dt)
                             --monster.health;
                             resident.cooldown = 1;
                             if (monster.health <= 0)
-                                monster.respawn = 12;
+                                monster.respawn = 2;
                         }
                         break;
                     }
@@ -724,6 +868,38 @@ void UpdatePopulation(float dt)
                            dt,
                            resident.heading,
                            Dist(target, player) < .1f ? 1.1f : .15f);
+            resident.walking = Dist(previousPosition, resident.position) > .0001f;
+        }
+    }
+    // Only a physical encounter can transfer knowledge. Snapshot masks prevent
+    // a rumor from crossing multiple NPCs in one simulation tick.
+    rumorClock += dt;
+    if (rumorClock >= 1)
+    {
+        rumorClock = 0;
+        std::vector<unsigned> next;
+        for (const auto &r : residents)
+            next.push_back(r.rumors);
+        for (std::size_t a = 0; a < residents.size(); ++a)
+            for (std::size_t b = a + 1; b < residents.size(); ++b)
+            {
+                auto &ra = residents[a];
+                auto &rb = residents[b];
+                if (Dist(ra.position, rb.position) > 3 ||
+                    (Dist(ra.position, ra.lastExchange) < .25f &&
+                     Dist(rb.position, rb.lastExchange) < .25f))
+                    continue;
+                unsigned combined = ra.rumors | rb.rumors;
+                if (combined != ra.rumors || combined != rb.rumors)
+                    ++rumorTransfers;
+                next[a] |= combined;
+                next[b] |= combined;
+            }
+        for (std::size_t i = 0; i < residents.size(); ++i)
+        {
+            if (residents[i].rumors != next[i])
+                residents[i].lastExchange = residents[i].position;
+            residents[i].rumors = next[i];
         }
     }
     if (testHealth <= 0)
@@ -830,7 +1006,16 @@ void Interact()
         Say(n.name, L"새로운 반응을 관찰했구나. 정체는 아직 알 수 없으니 차근차근 조사해 보자.");
     }
     else
+    {
         Say(n.name, n.line);
+        for (int v = 0; v < VillageCount; ++v)
+            if (resident.rumors & (1u << v))
+            {
+                dialog += std::wstring(L" 전해 들은 이야기: ") + villageNames[v] +
+                          L" 숲에서 정체 모를 빛이 보였대요.";
+                break;
+            }
+    }
 }
 
 void KeyDown(unsigned char k, int, int)
@@ -939,7 +1124,7 @@ void Tick(int)
                 // Inverse of the renderer's +45-degree Y rotation on the ground plane.
                 // Screen right = (+X,+Z), screen up = (+X,-Z).
                 // Facing is an output of movement, never an input to its direction.
-                const float step = 3.2f * dt / len;
+                const float step = PlayerSpeed * dt / len;
                 const float dx = (sx + sy) * .70710678f * step;
                 const float dz = (sx - sy) * .70710678f * step;
                 moving = true;
@@ -1074,63 +1259,19 @@ void WoodenDoor(P b)
 
 void Person(float x, float z, C coat, bool student = false)
 {
-    float cycle = student ? (moving ? walk : 0) : std::sin(time + x) * .15f;
     glPushMatrix();
     glTranslatef(x, 0, z);
-    for (int side = -1; side <= 1; side += 2)
-    {
-        glPushMatrix();
-        glTranslatef(side * .14f, .6f, 0);
-        glRotatef(std::sin(cycle) * 24 * side, 1, 0, 0);
-        Box(0, -.23f, 0, .18f, .46f, .20f, {.22f, .22f, .30f});
-        Box(0, -.48f, .065f, .22f, .16f, .34f, {.23f, .15f, .11f});
-        glPopMatrix();
-        glPushMatrix();
-        glTranslatef(side * .32f, 1.12f, 0);
-        glRotatef(-std::sin(cycle) * 23 * side, 1, 0, 0);
-        Box(0, -.17f, 0, .18f, .39f, .22f, coat);
-        Ball(0, -.41f, 0, .105f, {.96f, .73f, .51f});
-        glPopMatrix();
-    }
-    Box(0, .88f, 0, .52f, .61f, .34f, coat);
-    Box(0, .68f, .02f, .56f, .085f, .38f, {.33f, .21f, .12f});
-    Box(0, .7f, .22f, .09f, .10f, .04f, {.95f, .75f, .30f});
-    Ball(0, 1.4f, 0, .255f, {.98f, .78f, .56f});
-    Ball(0, 1.54f, -.055f, .23f, {.29f, .18f, .13f});
-    Ball(-.09f, 1.43f, .22f, .035f, {.13f, .16f, .19f});
-    Ball(.09f, 1.43f, .22f, .035f, {.13f, .16f, .19f});
-    Ball(0, 1.35f, .24f, .048f, {.89f, .57f, .40f});
-    if (student)
-    {
-        Cone(0, 1.61f, 0, .38f, .61f, {.34f, .27f, .57f});
-        Box(0, 1.13f, -.22f, .50f, .62f, .07f, {.30f, .26f, .49f});
-        Box(.44f, .77f, .08f, .045f, .82f, .045f, {.43f, .25f, .13f});
-        renderer->MaterialMode(-1, .8f);
-        Ball(.44f, 1.21f, .08f, .08f, {1, .80f, .30f});
-        renderer->MaterialMode();
-    }
-    else
-    {
-        Cone(0, 1.59f, 0, .30f, .14f, coat);
-        Box(.21f, .8f, -.18f, .18f, .22f, .16f, {.42f, .27f, .16f});
-    }
+    villageModels->DrawAnimated(Model::HeroIdle, Model::Hero0, walk / 6.2831853f, moving);
     glPopMatrix();
 }
 
 void Creature(float x, float z)
 {
-    Ball(x, .42f, z, .25f, {.55f, .77f, .85f});
-    Ball(x, .66f, z - .15f, .20f, {.69f, .87f, .91f});
-    for (int side = -1; side <= 1; side += 2)
-    {
-        glPushMatrix();
-        glTranslatef(x + side * .2f, .5f, z);
-        glRotatef(side * (20 + std::sin(time * 6) * 18), 0, 0, 1);
-        Cone(0, 0, 0, .17f, .4f, {.67f, .52f, .82f});
-        glPopMatrix();
-    }
-    Ball(x - .08f, .7f, z - .32f, .035f, {.12f, .19f, .25f});
-    Ball(x + .08f, .7f, z - .32f, .035f, {.12f, .19f, .25f});
+    glPushMatrix();
+    glTranslatef(x, 0, z);
+    glScalef(.45f, .45f, .45f);
+    villageModels->DrawAnimated(Model::CatIdle, Model::Cat0, time, moving && stage >= 4);
+    glPopMatrix();
 }
 
 void Wildlife(const Animal &a)
@@ -1138,86 +1279,37 @@ void Wildlife(const Animal &a)
     glPushMatrix();
     glTranslatef(a.position.x, 0, a.position.z);
     glRotatef(a.heading, 0, 1, 0);
-    float scale = a.kind == 0 ? 1.f : (a.kind == 1 ? .5f : .72f);
-    glScalef(scale, scale, scale);
-    C fur = a.kind == 0 ? C{.59f, .40f, .23f}
-                        : (a.kind == 1 ? C{.82f, .79f, .67f} : C{.83f, .39f, .16f});
-    glPushMatrix();
-    glTranslatef(0, .62f, 0);
-    glScalef(.7f, .8f, 1.35f);
-    Ball(0, 0, 0, .52f, fur);
+    if (a.kind == 0)
+        villageModels->DrawAnimated(Model::DeerIdle, Model::Deer0, a.phase / 6.2831853f, true);
+    else if (a.kind == 1)
+    {
+        glScalef(.65f, .65f, .65f);
+        villageModels->DrawAnimated(Model::CatIdle, Model::Cat0, a.phase / 6.2831853f, true);
+    }
+    else
+        villageModels->DrawAnimated(Model::WolfIdle, Model::Wolf0, a.phase / 6.2831853f, true);
     glPopMatrix();
-    for (int i = 0; i < 4; ++i)
-    {
-        float side = i % 2 ? 1.f : -1.f, front = i / 2 ? 1.f : -1.f;
-        Box(side * .23f,
-            .27f,
-            front * .34f + std::sin(a.phase + float(i)) * .06f,
-            .105f,
-            .5f,
-            .12f,
-            fur);
-    }
-    Ball(0, .88f, .54f, .25f, fur);
-    Ball(0, .81f, .77f, .13f, a.kind == 1 ? C{.93f, .87f, .79f} : fur);
-    for (int side = -1; side <= 1; side += 2)
-    {
-        Cone(side * .14f, 1.04f, .5f, .08f, a.kind == 1 ? .48f : .22f, fur);
-        Ball(side * .16f, .94f, .70f, .035f, {.10f, .12f, .12f});
-        if (a.kind == 0)
-        {
-            Box(side * .19f, 1.32f, .42f, .05f, .5f, .05f, {.39f, .29f, .18f});
-            Box(side * .26f, 1.46f, .42f, .17f, .05f, .05f, {.39f, .29f, .18f});
-        }
-    }
-    if (a.kind == 2)
-    {
-        glPushMatrix();
-        glTranslatef(0, .53f, -.5f);
-        glRotatef(-45, 1, 0, 0);
-        Cone(0, 0, 0, .18f, .7f, fur);
-        glPopMatrix();
-    }
+}
+
+void DrawStreetLamp()
+{
+    renderer->MaterialMode();
+    const C wood = {.25f, .13f, .055f};
+    Box(0, .15f, 0, .38f, .30f, .38f, {.29f, .28f, .23f});
+    Box(0, 1.40f, 0, .18f, 2.50f, .18f, wood);
+    Box(.34f, 2.56f, 0, .90f, .16f, .18f, wood);
+    Box(.22f, 2.28f, 0, .55f, .10f, .13f, wood);
+    Box(.64f, 2.30f, 0, .045f, .42f, .045f, {.12f, .11f, .09f});
+    glPushMatrix();
+    glTranslatef(.64f, 1.75f, 0);
+    glScalef(1.25f, 1.25f, 1.25f);
+    villageModels->Draw(Model::Lantern);
     glPopMatrix();
 }
 
 void DrawHouse()
 {
-    const P b = {0, 0};
-    Box(b.x, .9f, b.z, 3, 1.8f, 2.6f, {.48f, .49f, .40f});
-    Roof(b);
-    // Facade details stay inside the original house silhouette and collision footprint.
-    Box(0, .16f, 0, 3.02f, .32f, 2.62f, {.32f, .35f, .29f});
-    Box(0, 3.57f, 0, .19f, .16f, 3.32f, {.36f, .22f, .10f});
-    for (int side = -1; side <= 1; side += 2)
-    {
-        Box(side * 1.48f, 1.02f, 0, .13f, 1.70f, 2.62f, {.28f, .17f, .08f});
-        Box(side * 1.84f, 1.87f, 0, .15f, .17f, 3.32f, {.39f, .25f, .12f});
-        for (int end = -1; end <= 1; end += 2)
-        {
-            glPushMatrix();
-            glTranslatef(side * .925f, 2.725f, end * 1.65f);
-            glRotatef(side * 46.6f, 0, 0, 1);
-            Box(0, 0, 0, .16f, 2.55f, .17f, {.42f, .27f, .12f});
-            glPopMatrix();
-        }
-    }
-    Box(0, 2.47f, 1.32f, .14f, 1.18f, .12f, {.28f, .17f, .08f});
-    for (int side = -1; side <= 1; side += 2)
-    {
-        Box(b.x + side * 1.43f, .93f, b.z + 1.34f, .13f, 1.86f, .12f, {.31f, .21f, .14f});
-        Box(b.x + side * .87f, 1.1f, b.z + 1.34f, .61f, .68f, .08f, {.31f, .21f, .14f});
-        renderer->MaterialMode(-1, .8f);
-        Box(b.x + side * .87f, 1.1f, b.z + 1.39f, .46f, .53f, .025f, {1, .69f, .26f});
-        renderer->MaterialMode();
-        Box(b.x + side * .87f, 1.1f, b.z + 1.42f, .05f, .55f, .03f, {.33f, .22f, .14f});
-    }
-    Box(b.x, 1.76f, b.z + 1.36f, 3, .12f, .13f, {.31f, .21f, .14f});
-    Box(b.x, .59f, b.z + 1.34f, .68f, 1.18f, .09f, {.39f, .25f, .13f});
-    WoodenDoor(b);
-    Ball(b.x + .22f, .62f, b.z + 1.42f, .045f, {.88f, .66f, .25f});
-    Box(b.x, 0, b.z + 1.6f, 1.1f, .16f, .7f, {.53f, .53f, .45f});
-    Box(b.x + 1, 2.6f, b.z - .5f, .42f, 1.5f, .45f, {.55f, .48f, .40f});
+    villageModels->Draw(Model::House);
 }
 
 void DrawRoads()
@@ -1245,34 +1337,22 @@ void DrawRoads()
 
 void DrawWater()
 {
-    // Animated water surface with geometric ripples, changing normals and foam.
-    renderer->MaterialMode(-1, .18f);
-    const int rings = 18, segments = 64;
-    auto waterVertex = [](float radius, float angle)
+    renderer->MaterialMode();
+    renderer->EffectMode(1, time);
+    Color({1, 1, 1});
+    Renderer::CountedBegin(GL_TRIANGLE_FAN);
+    glNormal3f(0, 1, 0);
+    glTexCoord2f(.5f, .5f);
+    glVertex3f(0, .10f, 0);
+    for (int i = 0; i <= 64; ++i)
     {
-        float x = 0 + std::cos(angle) * radius * 4.25f, z = 0 + std::sin(angle) * radius * 3.85f;
-        float wave = std::sin(x * 2 + time * 1.4f) * std::cos(z * 2.3f + time) * .025f;
-        glNormal3f(-.05f * std::cos(x * 2 + time * 1.4f), 1, -.05f * std::sin(z * 2.3f + time));
-        Color({.08f + radius * .08f, .30f + radius * .10f + wave, .33f + radius * .10f});
-        glVertex3f(x, .075f + wave, z);
-    };
-    for (int ring = 0; ring < rings; ++ring)
-    {
-        Renderer::CountedBegin(GL_TRIANGLE_STRIP);
-        for (int j = 0; j <= segments; ++j)
-        {
-            float a = j * 6.2831853f / segments;
-            waterVertex(float(ring) / rings, a);
-            waterVertex(float(ring + 1) / rings, a);
-        }
-        glEnd();
+        const float angle = -i * 6.2831853f / 64;
+        const float x = std::cos(angle), z = std::sin(angle);
+        glTexCoord2f(x * .5f + .5f, z * .5f + .5f);
+        glVertex3f(x * 4.25f, .10f, z * 3.85f);
     }
-    renderer->MaterialMode(-1, .5f);
-    for (int i = 0; i < 30; ++i)
-    {
-        float a = i * 2.4f + time * .07f, r = 1.2f + (i % 6) * .44f;
-        Disk(0 + std::cos(a) * r, .115f, 0 + std::sin(a) * r, .11f, .025f, {.61f, .86f, .86f});
-    }
+    glEnd();
+    renderer->EffectMode(0, time);
 }
 
 void DrawFire()
@@ -1298,10 +1378,113 @@ void DrawFire()
 
 void HUD();
 
+// One shared height field drives the terrace mesh and all grounded actor transforms.
+constexpr int TerraceWidth = int(MapMaxX - MapMinX);
+constexpr int TerraceDepth = int(MapMaxZ - MapMinZ);
+constexpr float TerraceStepHeight = .50f;
+static std::vector<float> terraceHeights;
+
+float TerraceHeight(P p)
+{
+    const int x = int(std::floor(p.x - MapMinX));
+    const int z = int(std::floor(p.z - MapMinZ));
+    if (x < 0 || z < 0 || x >= TerraceWidth || z >= TerraceDepth || terraceHeights.empty())
+        return 0;
+    return terraceHeights[z * TerraceWidth + x];
+}
+
+void BuildTerraceHeights()
+{
+    Profiling::Scope profile("village.terrace_generate");
+    terraceHeights.assign(TerraceWidth * TerraceDepth, 0);
+    for (int z = 0; z < TerraceDepth; ++z)
+        for (int x = 0; x < TerraceWidth; ++x)
+        {
+            P p = {MapMinX + x + .5f, MapMinZ + z + .5f};
+            float height = 0;
+            for (int v = 0; v < VillageCount; ++v)
+            {
+                const float cx = VillageCenter(v).x;
+                const P hills[] = {{cx - 13, -2}, {cx + 13, 19}, {cx - 8, 27}, {cx + 8, -25}};
+                for (P hill : hills)
+                {
+                    const float dx = (p.x - hill.x) / 12.f;
+                    const float dz = (p.z - hill.z) / 10.f;
+                    const float radius = std::sqrt(dx * dx + dz * dz);
+                    height = (std::max)(height, 2.2f * (1.f - radius));
+                }
+            }
+            float clearance = 100;
+            for (const Trail &trail : trails)
+                clearance =
+                    (std::min)(clearance, SegmentDistance(p, trail) - trail.width * .5f - 1.f);
+            for (P house : houses)
+                clearance = (std::min)(clearance, Dist(p, house) - 3.8f);
+            for (P fire : campfires)
+                clearance = (std::min)(clearance, Dist(p, fire) - 2.f);
+            clearance = (std::min)(clearance, Dist(p, stone) - 3.f);
+            clearance = (std::min)(clearance, Dist(p, seed) - 3.f);
+            if (InPond(p, 2.f) || Dist(p, {9, -4}) < 6.f)
+                clearance = 0;
+            height = (std::min)(height, clearance * .18f);
+            terraceHeights[z * TerraceWidth + x] =
+                std::floor((std::max)(0.f, height) / TerraceStepHeight) * TerraceStepHeight;
+        }
+    // Preserve broad half-meter terraces without introducing extra thin steps.
+    for (int pass = 0; pass < 16; ++pass)
+        for (int z = 0; z < TerraceDepth; ++z)
+            for (int x = 0; x < TerraceWidth; ++x)
+            {
+                float &h = terraceHeights[z * TerraceWidth + x];
+                for (P d : {P{-1, 0}, P{1, 0}, P{0, -1}, P{0, 1}})
+                    h = (std::min)(h,
+                                   TerraceHeight(
+                                       {MapMinX + x + d.x + .5f, MapMinZ + z + d.z + .5f}) +
+                                       TerraceStepHeight);
+            }
+}
+
+struct TerraceMesh
+{
+    struct Vertex
+    {
+        float x, y, z, nx, ny, nz, r, g, b, a, u, v;
+    };
+
+    GLuint buffer = 0;
+    GLsizei count = 0;
+
+    ~TerraceMesh()
+    {
+        if (buffer)
+            glDeleteBuffers(1, &buffer);
+    }
+
+    void Draw() const
+    {
+        renderer->MaterialMode();
+        glBindBuffer(GL_ARRAY_BUFFER, buffer);
+        glEnableClientState(GL_VERTEX_ARRAY);
+        glEnableClientState(GL_NORMAL_ARRAY);
+        glEnableClientState(GL_COLOR_ARRAY);
+        glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+        glVertexPointer(3, GL_FLOAT, sizeof(Vertex), nullptr);
+        glNormalPointer(GL_FLOAT, sizeof(Vertex), reinterpret_cast<void *>(12));
+        glColorPointer(4, GL_FLOAT, sizeof(Vertex), reinterpret_cast<void *>(24));
+        glTexCoordPointer(2, GL_FLOAT, sizeof(Vertex), reinterpret_cast<void *>(40));
+        Renderer::CountedDrawArrays(GL_TRIANGLES, 0, count);
+        glDisableClientState(GL_VERTEX_ARRAY);
+        glDisableClientState(GL_NORMAL_ARRAY);
+        glDisableClientState(GL_COLOR_ARRAY);
+        glDisableClientState(GL_TEXTURE_COORD_ARRAY);
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
+    }
+};
+
 ActorTransform Placement(
     P p, float y = 0, float heading = 0, float sx = 1, float sy = 1, float sz = 1)
 {
-    return {{p.x, y, p.z}, {0, heading, 0}, {sx, sy, sz}};
+    return {{p.x, y + TerraceHeight(p), p.z}, {0, heading, 0}, {sx, sy, sz}};
 }
 
 Actor &Place(const wchar_t *name,
@@ -1327,6 +1510,7 @@ void BuildScene()
 {
     Profiling::Scope profile("scene.build");
     scene.Clear();
+    BuildTerraceHeights();
     animalActors.clear();
     breadcrumbActors.clear();
     const ActorId level = scene.Create(L"튜토리얼").Id();
@@ -1344,21 +1528,114 @@ void BuildScene()
         chunks.emplace(key, chunk.Id());
         return chunk.Id();
     };
+
+    // Upload each 16m patch once; individual steps do not issue separate draw calls.
+    for (int cz = 0; cz < TerraceDepth; cz += 16)
+        for (int cx = 0; cx < TerraceWidth; cx += 16)
+        {
+            std::vector<TerraceMesh::Vertex> vertices;
+            auto quad = [&](Vector3 a, Vector3 b, Vector3 c, Vector3 d, Vector3 n, bool top)
+            {
+                for (Vector3 p : {a, b, c, a, c, d})
+                    vertices.push_back({p.x,
+                                        p.y,
+                                        p.z,
+                                        n.x,
+                                        n.y,
+                                        n.z,
+                                        top ? .29f : .32f,
+                                        top ? .39f : .29f,
+                                        top ? .12f : .22f,
+                                        1,
+                                        p.x,
+                                        top ? -108.f : -103.f});
+            };
+            for (int z = cz; z < (std::min)(cz + 16, TerraceDepth); ++z)
+                for (int x = cx; x < (std::min)(cx + 16, TerraceWidth); ++x)
+                {
+                    float px = MapMinX + x, pz = MapMinZ + z;
+                    float h = TerraceHeight({px + .5f, pz + .5f});
+                    if (h < .01f)
+                        continue;
+                    quad({px, h, pz},
+                         {px, h, pz + 1},
+                         {px + 1, h, pz + 1},
+                         {px + 1, h, pz},
+                         {0, 1, 0},
+                         true);
+                    float low = TerraceHeight({px - .5f, pz + .5f});
+                    if (low < h)
+                        quad({px, low, pz},
+                             {px, low, pz + 1},
+                             {px, h, pz + 1},
+                             {px, h, pz},
+                             {-1, 0, 0},
+                             false);
+                    low = TerraceHeight({px + 1.5f, pz + .5f});
+                    if (low < h)
+                        quad({px + 1, low, pz + 1},
+                             {px + 1, low, pz},
+                             {px + 1, h, pz},
+                             {px + 1, h, pz + 1},
+                             {1, 0, 0},
+                             false);
+                    low = TerraceHeight({px + .5f, pz - .5f});
+                    if (low < h)
+                        quad({px + 1, low, pz},
+                             {px, low, pz},
+                             {px, h, pz},
+                             {px + 1, h, pz},
+                             {0, 0, -1},
+                             false);
+                    low = TerraceHeight({px + .5f, pz + 1.5f});
+                    if (low < h)
+                        quad({px, low, pz + 1},
+                             {px + 1, low, pz + 1},
+                             {px + 1, h, pz + 1},
+                             {px, h, pz + 1},
+                             {0, 0, 1},
+                             false);
+                }
+            if (vertices.empty())
+                continue;
+            auto mesh = std::make_shared<TerraceMesh>();
+            mesh->count = static_cast<GLsizei>(vertices.size());
+            glGenBuffers(1, &mesh->buffer);
+            glBindBuffer(GL_ARRAY_BUFFER, mesh->buffer);
+            glBufferData(GL_ARRAY_BUFFER,
+                         vertices.size() * sizeof(TerraceMesh::Vertex),
+                         vertices.data(),
+                         GL_STATIC_DRAW);
+            glBindBuffer(GL_ARRAY_BUFFER, 0);
+            Place(L"넓은 잔디 계단 지형",
+                  terrain,
+                  ActorTransform{},
+                  ActorBounds::Box({MapMinX + cx, 0, MapMinZ + cz},
+                                   {MapMinX + cx + 16, 2.5f, MapMinZ + cz + 16}),
+                  [mesh]
+                  {
+                      mesh->Draw();
+                  });
+        }
     Place(
         L"지면",
         terrain,
         Placement({0, 0}),
-        ActorBounds::Box({-90, -.05f, -86}, {90, 0, 86}),
+        ActorBounds::Box({MapMinX - 15, -.05f, MapMinZ - 15}, {MapMaxX + 15, 0, MapMaxZ + 15}),
         []
         {
-            Ground(0, 0, 180, 172, Renderer::Grass);
+            Ground((MapMinX + MapMaxX) / 2,
+                   (MapMinZ + MapMaxZ) / 2,
+                   MapMaxX - MapMinX + 30,
+                   MapMaxZ - MapMinZ + 30,
+                   Renderer::Grass);
         },
         false);
     Place(
         L"돌길",
         terrain,
         Placement({0, 0}),
-        ActorBounds::Box({-56, 0, -52}, {56, .04f, 52}),
+        ActorBounds::Box({MapMinX, 0, MapMinZ}, {MapMaxX, .04f, MapMaxZ}),
         []
         {
             DrawRoads();
@@ -1392,7 +1669,7 @@ void BuildScene()
         Place(
             L"들풀 군락",
             chunkFor(shrub),
-            Placement(shrub, 0, 0, .55f, .24f, .55f),
+            Placement(shrub, 0, shrub.x * 13.f, 1, 1, 1),
             villageModels->Bounds(Model::GrassTuft),
             []
             {
@@ -1429,7 +1706,7 @@ void BuildScene()
               Box(2, .9f, 0, .7f, 1.8f, .7f, {.55f, .57f, .5f});
               Box(0, .3f, 2, 3, .6f, .9f, {.48f, .51f, .44f});
           });
-    for (std::size_t i = 8; i < sizeof(houses) / sizeof(houses[0]); ++i)
+    for (std::size_t i = 8; i < houses.size(); ++i)
     {
         P house = houses[i];
         Place(
@@ -1446,11 +1723,50 @@ void BuildScene()
             },
             false);
     }
+    for (std::size_t i = 0; i < houses.size(); ++i)
+    {
+        const P h = houses[i];
+        const Model prop = i % 3 == 0 ? Model::Table : i % 3 == 1 ? Model::Barrel : Model::Chest;
+        Place(L"주택 생활 소품",
+              chunkFor(h),
+              Placement({h.x - .7f, h.z - 2.2f}),
+              villageModels->Bounds(prop),
+              [prop]
+              {
+                  villageModels->Draw(prop);
+              });
+        Place(L"주택 등불",
+              chunkFor(h),
+              Placement({h.x + 1.1f, h.z + 1.5f}, 1.1f, 0, .55f, .55f, .55f),
+              villageModels->Bounds(Model::Lantern),
+              []
+              {
+                  villageModels->Draw(Model::Lantern);
+              });
+    }
+    // Three hand-spaced lamps per village, along the outside of the main street.
+    streetLamps.clear();
+    for (int village = 0; village < VillageCount; ++village)
+    {
+        const P center = VillageCenter(village);
+        const StreetLamp locations[] = {{{center.x - 2.25f, -7.f}, 0},
+                                        {{center.x + 2.25f, 14.f}, 180},
+                                        {{center.x - 2.25f, 22.5f}, 0}};
+        for (const StreetLamp &lamp : locations)
+        {
+            streetLamps.push_back(lamp);
+            Place(L"목재 가로등",
+                  chunkFor(lamp.position),
+                  Placement(lamp.position, 0, lamp.heading),
+                  ActorBounds::Box({-.22f, 0, -.22f}, {.85f, 2.70f, .22f}),
+                  DrawStreetLamp);
+        }
+    }
     for (P b : houses)
         Place(L"주택",
               chunkFor(b),
               Placement(b),
-              ActorBounds::Box({-1.9f, -.1f, -1.7f}, {1.9f, 3.65f, 2}),
+              villageModels->Bounds(Model::House),
               []
               {
                   DrawHouse();
@@ -1465,9 +1781,9 @@ void BuildScene()
                         1.f + .3f * std::sin(t.z * 2),
                         .85f + .2f * std::sin(t.x)),
               ActorBounds::Box({-1.2f, 0, -1.2f}, {1.2f, 4.1f, 1.2f}),
-              []
+              [t]
               {
-                  villageModels->Draw(Model::Tree);
+                  villageModels->Draw(std::sin(t.x + t.z) > .45f ? Model::Broadleaf : Model::Tree);
               });
     for (int i = 0; i < 180; ++i)
     {
@@ -1494,21 +1810,35 @@ void BuildScene()
                                    ActorBounds::Box({-.65f, 0, -.65f}, {.65f, 2.3f, .65f}),
                                    [i]
                                    {
-                                       Person(0, 0, villagers[i].color);
+                                       const auto &r = residents[i];
+                                       const bool merchant = r.behavior == Behavior::Merchant;
+                                       const bool healer = r.behavior == Behavior::Priest ||
+                                                           r.behavior == Behavior::Helpful;
+                                       villageModels->DrawAnimated(merchant ? Model::MerchantIdle
+                                                                   : healer ? Model::HealerIdle
+                                                                            : Model::HeroIdle,
+                                                                   merchant ? Model::Merchant0
+                                                                   : healer ? Model::Healer0
+                                                                            : Model::Hero0,
+                                                                   time * 1.1f + float(i) * .13f,
+                                                                   r.walking);
                                    })
                                  .Id();
     }
     for (std::size_t i = 0; i < monsters.size(); ++i)
-        monsters[i].actor =
-            Place(L"숲 몬스터",
-                  dynamic,
-                  Placement(monsters[i].position),
-                  ActorBounds::Box({-.7f, 0, -.9f}, {.7f, 1.2f, .9f}),
-                  [i]
-                  {
-                      villageModels->Draw(monsters[i].kind == 0 ? Model::Slime : Model::Boar);
-                  })
-                .Id();
+        monsters[i].actor = Place(L"숲 몬스터",
+                                  dynamic,
+                                  Placement(monsters[i].position),
+                                  ActorBounds::Box({-1, -.2f, -1.6f}, {1, 1.9f, 1.6f}),
+                                  [i]
+                                  {
+                                      villageModels->DrawAnimated(
+                                          monsters[i].kind == 0 ? Model::CatIdle : Model::WolfIdle,
+                                          monsters[i].kind == 0 ? Model::Cat0 : Model::Wolf0,
+                                          time + float(i) * .17f,
+                                          true);
+                                  })
+                                .Id();
     heroActor = Place(L"플레이어",
                       dynamic,
                       Placement(player),
@@ -1522,7 +1852,7 @@ void BuildScene()
         animalActors.push_back(Place(L"야생동물",
                                      dynamic,
                                      Placement(animals[i].position),
-                                     ActorBounds::Box({-.8f, 0, -1.4f}, {.8f, 1.7f, 1.4f}),
+                                     ActorBounds::Box({-1, -.2f, -1.6f}, {1, 2.2f, 1.6f}),
                                      [i]
                                      {
                                          Animal local = animals[i];
@@ -1762,31 +2092,37 @@ void HUD()
     Renderer::CountedBegin(GL_POINTS);
     Color({.25f, .45f, .25f});
     for (P p : trees)
-        glVertex2f(1147 + p.x * 1.65f, 131 + p.z * 1.1f);
+        glVertex2f(1050 + ((p.x) - MapMinX) * (194.f / (MapMaxX - MapMinX)),
+                   87 + ((p.z) - MapMinZ) * (96.f / (MapMaxZ - MapMinZ)));
     Color({.7f, .6f, .4f});
     for (P p : trailTiles)
-        glVertex2f(1147 + p.x * 1.65f, 131 + p.z * 1.1f);
+        glVertex2f(1050 + ((p.x) - MapMinX) * (194.f / (MapMaxX - MapMinX)),
+                   87 + ((p.z) - MapMinZ) * (96.f / (MapMaxZ - MapMinZ)));
     Color({.75f, .64f, .5f});
     for (P house : houses)
-        glVertex2f(1147 + house.x * 1.65f, 131 + house.z * 1.1f);
+        glVertex2f(1050 + ((house.x) - MapMinX) * (194.f / (MapMaxX - MapMinX)),
+                   87 + ((house.z) - MapMinZ) * (96.f / (MapMaxZ - MapMinZ)));
     Color({.3f, .6f, .85f});
     for (const auto &pond : ponds)
         for (int x = -6; x <= 6; ++x)
             for (int z = -6; z <= 6; ++z)
                 if (x * x / (pond.rx * pond.rx) + z * z / (pond.rz * pond.rz) < 1)
-                    glVertex2f(1147 + (pond.center.x + x) * 1.65f,
-                               131 + (pond.center.z + z) * 1.1f);
+                    glVertex2f(
+                        1050 + (((pond.center.x + x)) - MapMinX) * (194.f / (MapMaxX - MapMinX)),
+                        87 + (((pond.center.z + z)) - MapMinZ) * (96.f / (MapMaxZ - MapMinZ)));
     for (int x = -4; x <= 4; ++x)
         for (int z = -3; z <= 3; ++z)
             if (x * x / 20.f + z * z / 16.f < 1)
-                glVertex2f(1147 + (9 + x) * 1.65f, 131 + (-4 + z) * 1.1f);
+                glVertex2f(1050 + (((9 + x)) - MapMinX) * (194.f / (MapMaxX - MapMinX)),
+                           87 + (((-4 + z)) - MapMinZ) * (96.f / (MapMaxZ - MapMinZ)));
     glEnd();
     auto dot = [](P p, C c)
     {
         Color(c);
         glPointSize(3);
         Renderer::CountedBegin(GL_POINTS);
-        glVertex2f(1147 + p.x * 1.65f, 131 + p.z * 1.1f);
+        glVertex2f(1050 + ((p.x) - MapMinX) * (194.f / (MapMaxX - MapMinX)),
+                   87 + ((p.z) - MapMinZ) * (96.f / (MapMaxZ - MapMinZ)));
         glEnd();
     };
     for (const auto &resident : residents)
@@ -1850,9 +2186,7 @@ void Shutdown()
 
 int MonitorRegion(P p)
 {
-    if (p.x > -17 && p.x < 18 && p.z > -10 && p.z < 28)
-        return 0;
-    return p.z < 0 ? (p.x < 0 ? 1 : 2) : (p.x < 0 ? 3 : 4);
+    return NearestVillage(p);
 }
 
 void PublishMonitoring()
@@ -1872,13 +2206,14 @@ void PublishMonitoring()
                                      L"친절한 주민",
                                      L"산적",
                                      L"심술궂은 주민"};
-    static const wchar_t *regions[] = {
-        L"중앙 마을", L"북서 외곽", L"북동 외곽", L"남서 외곽", L"남동 외곽"};
     int npcCounts[5] = {}, mobCounts[5] = {}, deadCounts[5] = {}, hostileCounts[5] = {};
     std::ostringstream out;
     out.imbue(std::locale::classic());
-    out << "{\"schema_version\":1,\"mode\":\"village\",\"session_id\":" << GetCurrentProcessId()
-        << ",\"sequence\":" << ++sequence << ",\"paused\":" << (paused ? "true" : "false")
+    out << "{\"schema_version\":2,\"mode\":\"village\",\"session_id\":" << GetCurrentProcessId()
+        << ",\"map_bounds\":{\"min_x\":" << MapMinX << ",\"max_x\":" << MapMaxX
+        << ",\"min_z\":" << MapMinZ << ",\"max_z\":" << MapMaxZ << "}"
+        << ",\"rumor_transfers_total\":" << rumorTransfers << ",\"sequence\":" << ++sequence
+        << ",\"paused\":" << (paused ? "true" : "false")
         << ",\"dialogue_open\":" << (!dialog.empty() ? "true" : "false")
         << ",\"player\":{\"health\":" << testHealth << ",\"coins\":" << testCoins
         << ",\"experience\":" << testExperience << "},\"npcs\":[";
@@ -1899,11 +2234,14 @@ void PublishMonitoring()
         if (i)
             out << ',';
         out << "{\"id\":" << i << ",\"actor_id\":" << r.actor
-            << ",\"name\":" << Monitoring::Quote(villagers[i].name)
-            << ",\"role\":" << Monitoring::Quote(roles[int(r.behavior)])
+            << ",\"name\":" << Monitoring::Quote(villagers[i].name) << ",\"role\":"
+            << Monitoring::Quote(r.courier ? L"마을 간 전달자" : roles[int(r.behavior)])
             << ",\"state\":" << Monitoring::Quote(state) << ",\"region\":" << region
-            << ",\"x\":" << r.position.x << ",\"z\":" << r.position.z
-            << ",\"cooldown_seconds\":" << r.cooldown << ",\"stun_seconds\":" << r.stun << '}';
+            << ",\"home_village\":" << r.homeVillage << ",\"rumor_mask\":" << r.rumors
+            << ",\"courier\":" << (r.courier ? "true" : "false")
+            << ",\"destination_village\":" << r.destination << ",\"x\":" << r.position.x
+            << ",\"z\":" << r.position.z << ",\"cooldown_seconds\":" << r.cooldown
+            << ",\"stun_seconds\":" << r.stun << '}';
     }
     previous.clear();
     for (const auto &r : residents)
@@ -1920,7 +2258,7 @@ void PublishMonitoring()
         if (i)
             out << ',';
         out << "{\"id\":" << i
-            << ",\"kind\":" << Monitoring::Quote(m.kind == 0 ? L"슬라임" : L"멧돼지")
+            << ",\"kind\":" << Monitoring::Quote(m.kind == 0 ? L"야생 고양이" : L"늑대")
             << ",\"region\":" << region << ",\"health\":" << m.health
             << ",\"respawn_seconds\":" << (std::max)(0.f, m.respawn) << ",\"x\":" << m.position.x
             << ",\"z\":" << m.position.z << '}';
@@ -1930,8 +2268,30 @@ void PublishMonitoring()
     {
         if (i)
             out << ',';
-        out << "{\"id\":" << i << ",\"name\":" << Monitoring::Quote(regions[i])
-            << ",\"npc_count\":" << npcCounts[i] << ",\"hostile_npc_count\":" << hostileCounts[i]
+        int rumorKnown = 0, knowledge = 0, nearbyThreats = 0;
+        for (const auto &r : residents)
+            if (r.homeVillage == i)
+            {
+                if (r.rumors)
+                    ++rumorKnown;
+                for (int bit = 0; bit < VillageCount; ++bit)
+                    if (r.rumors & (1u << bit))
+                        ++knowledge;
+            }
+        for (const auto &m : monsters)
+            if (m.health > 0 && Dist(m.position, VillageCenter(i)) < 22)
+                ++nearbyThreats;
+        const int safety = (std::max)(0, 100 - nearbyThreats * 6);
+        const int curiosity = knowledge * 100 / (ResidentsPerVillage * VillageCount);
+        const wchar_t *mood = safety < 55 ? L"불안" : curiosity >= 40 ? L"호기심" : L"평온";
+        out << "{\"id\":" << i << ",\"name\":" << Monitoring::Quote(villageNames[i])
+            << ",\"resident_count\":" << ResidentsPerVillage
+            << ",\"center_x\":" << VillageCenter(i).x << ",\"center_z\":0"
+            << ",\"mood\":" << Monitoring::Quote(mood) << ",\"safety_score\":" << safety
+            << ",\"curiosity_score\":" << curiosity
+            << ",\"rumor_informed_residents\":" << rumorKnown
+            << ",\"nearby_threat_count\":" << nearbyThreats << ",\"npc_count\":" << npcCounts[i]
+            << ",\"hostile_npc_count\":" << hostileCounts[i]
             << ",\"monsters_alive\":" << mobCounts[i]
             << ",\"monsters_respawning\":" << deadCounts[i] << '}';
     }
@@ -1947,6 +2307,25 @@ void Render()
         return;
     Renderer::BeginFrame();
     SyncScene();
+    std::vector<Renderer::PointLight> lights;
+    lights.reserve(houses.size() + 5 + streetLamps.size());
+    for (P house : houses)
+        lights.push_back({house.x + 1.1f, 1.3f, house.z + 1.5f, 4.2f});
+    for (P fire : campfires)
+        lights.push_back({fire.x, 1.0f, fire.z, 5.f, 1.2f, .46f, .11f});
+    for (const StreetLamp &lamp : streetLamps)
+    {
+        const float side = lamp.heading == 0 ? 1.f : -1.f;
+        lights.push_back({lamp.position.x + side * .64f,
+                          TerraceHeight(lamp.position) + 2.05f,
+                          lamp.position.z,
+                          3.6f,
+                          .85f,
+                          .46f,
+                          .16f});
+    }
+    renderer->SetPointLights(lights);
+
     {
         Profiling::Scope profile("render.shadow", true);
         renderer->BeginShadow(camera.x, camera.z);

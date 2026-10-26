@@ -200,6 +200,13 @@
     <None Include="Shaders\SolidRect.vs" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ItemGroup>
+    <WillowmereAsset Include="Assets\Willowmere\*.*" />
+  </ItemGroup>
+  <Target Name="CopyWillowmereAssets" AfterTargets="Build">
+    <MakeDir Directories="$(OutDir)Assets\Willowmere" />
+    <Copy SourceFiles="@(WillowmereAsset)" DestinationFolder="$(OutDir)Assets\Willowmere" SkipUnchangedFiles="true" />
+  </Target>
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>
 </Project>

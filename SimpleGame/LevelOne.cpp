@@ -510,6 +510,8 @@ Actor &AddModel(const std::wstring &name,
     Actor &actor = scene.Create(name, parent);
     actor.SetTransform(transform);
     ActorBounds bounds = models->Bounds(model);
+    if (model == Model::Slime || model == Model::Boar)
+        bounds = ActorBounds::Box({-1, -.2f, -1.6f}, {1, 1.9f, 1.6f});
     if (model == Model::Water)
     {
         bounds.minimum.y -= .05f;
@@ -533,7 +535,13 @@ Actor &AddModel(const std::wstring &name,
     actor.SetDraw(
         [model]
         {
-            models->Draw(model);
+            if (model == Model::Slime || model == Model::Boar)
+                models->DrawAnimated(model == Model::Slime ? Model::CatIdle : Model::WolfIdle,
+                                     model == Model::Slime ? Model::Cat0 : Model::Wolf0,
+                                     time,
+                                     true);
+            else
+                models->Draw(model);
         });
     return actor;
 }
@@ -619,7 +627,7 @@ void BuildScene()
         []
         {
             const int frame = moving ? static_cast<int>(walkTime * 10) % 8 : 0;
-            models->Draw(static_cast<Model>(frame));
+            models->Draw(moving ? static_cast<Model>(frame) : Model::HeroIdle);
         });
     heroActor = hero.Id();
 
@@ -669,7 +677,7 @@ void SyncScene()
     }
     for (Enemy &enemy : enemies)
     {
-        const float squash = enemy.kind == 0 ? 1 + std::sin(time * 5) * .08f : 1;
+        const float squash = 1;
         sync(enemy.actor,
              enemy.kind == 0 ? Model::Slime : Model::Boar,
              L"적",
@@ -757,7 +765,7 @@ void HUD()
             glColor3f(tile == Rpg::Tile::Water ? .2f : .35f,
                       tile == Rpg::Tile::Ground ? .55f : .35f,
                       tile == Rpg::Tile::Water ? .75f : .25f);
-            glVertex2f(1052 + x * 5, 57 + z * 4.5f);
+            glVertex2f(1052.f + static_cast<float>(x) * 5.f, 57.f + static_cast<float>(z) * 4.5f);
         }
     }
     glEnd();
@@ -895,6 +903,8 @@ void Render()
     Profiling::Count("objects.projectiles", double(projectiles.size()));
     Profiling::Count("scheduler.timer_requested_ms", 16);
     SyncScene();
+    renderer->SetPointLights({{0, 1.f, 0, 5.f, 1.2f, .46f, .11f}});
+
     {
         Profiling::Scope profile("render.shadow", true);
         renderer->BeginShadow(camera.x, camera.z);
