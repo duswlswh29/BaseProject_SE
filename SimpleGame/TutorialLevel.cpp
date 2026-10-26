@@ -116,6 +116,8 @@ struct StreetLamp
 };
 
 static std::vector<StreetLamp> streetLamps;
+static std::vector<ActorId> groundChunks;
+static float groundChunkSize = 64.f;
 static float rumorClock = 0;
 static unsigned rumorTransfers = 0;
 
@@ -502,8 +504,6 @@ void Reset()
 
 bool Blocked(P p)
 {
-    if (p.x < MapMinX || p.x > MapMaxX || p.z < MapMinZ || p.z > MapMaxZ)
-        return true;
     if (InPond(p, .35f))
         return true;
     float x = (p.x - 9) / 4.5f, z = (p.z + 4) / 4.1f;
@@ -1617,20 +1617,22 @@ void BuildScene()
                       mesh->Draw();
                   });
         }
-    Place(
-        L"지면",
-        terrain,
-        Placement({0, 0}),
-        ActorBounds::Box({MapMinX - 15, -.05f, MapMinZ - 15}, {MapMaxX + 15, 0, MapMaxZ + 15}),
-        []
-        {
-            Ground((MapMinX + MapMaxX) / 2,
-                   (MapMinZ + MapMaxZ) / 2,
-                   MapMaxX - MapMinX + 30,
-                   MapMaxZ - MapMinZ + 30,
-                   Renderer::Grass);
-        },
-        false);
+    // A fixed pool covers the camera; crossing a cell reuses patches rather than growing memory.
+    groundChunks.clear();
+    for (int i = 0; i < 9; ++i)
+    {
+        Actor &ground = Place(
+            L"연속 평지 구역",
+            terrain,
+            ActorTransform{},
+            ActorBounds::Box({-32, -.05f, -32}, {32, 0, 32}),
+            []
+            {
+                Ground(0, 0, groundChunkSize, groundChunkSize, Renderer::Grass);
+            },
+            false);
+        groundChunks.push_back(ground.Id());
+    }
     Place(
         L"돌길",
         terrain,
@@ -2017,6 +2019,25 @@ void BuildScene()
 void SyncScene()
 {
     Profiling::Scope profile("scene.sync");
+    // Account for wide windows as well as the rotated orthographic view.
+    const float aspect =
+        float(glutGet(GLUT_WINDOW_WIDTH)) / (std::max)(1, glutGet(GLUT_WINDOW_HEIGHT));
+    groundChunkSize = (std::max)(64.f, std::ceil((22.f * aspect + 44.f) / 32.f) * 32.f);
+    const float centerX = std::floor(camera.x / groundChunkSize) * groundChunkSize;
+    const float centerZ = std::floor(camera.z / groundChunkSize) * groundChunkSize;
+    for (std::size_t i = 0; i < groundChunks.size(); ++i)
+    {
+        Actor *ground = scene.Find(groundChunks[i]);
+        ActorTransform transform;
+        transform.position = {centerX + (int(i % 3) - 1) * groundChunkSize,
+                              0,
+                              centerZ + (int(i / 3) - 1) * groundChunkSize};
+        ground->SetTransform(transform);
+        const float half = groundChunkSize * .5f;
+        ground->SetBounds(ActorBounds::Box({-half, -.05f, -half}, {half, 0, half}));
+    }
+    Profiling::Count("world.active_ground_chunks", double(groundChunks.size()));
+
     for (std::size_t i = 0; i < residents.size(); ++i)
         scene.Find(residents[i].actor)
             ->SetTransform(Placement(residents[i].position, 0, residents[i].heading));
@@ -2118,6 +2139,9 @@ void HUD()
     glEnd();
     auto dot = [](P p, C c)
     {
+        // The minimap still represents the settled area; off-map actors stay at its edge.
+        p.x = (std::max)(MapMinX, (std::min)(MapMaxX, p.x));
+        p.z = (std::max)(MapMinZ, (std::min)(MapMaxZ, p.z));
         Color(c);
         glPointSize(3);
         Renderer::CountedBegin(GL_POINTS);
@@ -2133,7 +2157,11 @@ void HUD()
     dot(seed, {.53f, .85f, .48f});
     dot(stone, {.4f, .79f, 1});
     dot(player, {1, 1, 1});
-    Text(1055, 204, L"흰 점: 내 위치");
+    Text(1055,
+         204,
+         (player.x < MapMinX || player.x > MapMaxX || player.z < MapMinZ || player.z > MapMaxZ)
+             ? L"마을 지도 밖 탐험 중"
+             : L"흰 점: 내 위치");
     bool isNearby = Dist(player, Target()) < 1.9f;
     for (const auto &resident : residents)
         isNearby = isNearby || Dist(player, resident.position) < 1.9f;
