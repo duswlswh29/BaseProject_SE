@@ -7,18 +7,68 @@
 
 namespace Rpg
 {
+namespace
+{
+std::uint32_t ForestHash(int x, int z, std::uint32_t seed)
+{
+    std::uint32_t h = std::uint32_t(x) * 0x8da6b343u ^ std::uint32_t(z) * 0xd8163841u ^ seed;
+    h ^= h >> 16;
+    h *= 0x7feb352du;
+    h ^= h >> 15;
+    h *= 0x846ca68bu;
+    h ^= h >> 16;
+    return h;
+}
+
+float ForestNoise(float x, float z, std::uint32_t seed)
+{
+    const int ix = int(std::floor(x)), iz = int(std::floor(z));
+    float u = x - ix, v = z - iz;
+    u = u * u * (3 - 2 * u);
+    v = v * v * (3 - 2 * v);
+    auto sample = [seed](int x, int z)
+    {
+        return (ForestHash(x, z, seed) & 65535u) / 65535.f;
+    };
+    const float a = sample(ix, iz) * (1 - u) + sample(ix + 1, iz) * u;
+    const float b = sample(ix, iz + 1) * (1 - u) + sample(ix + 1, iz + 1) * u;
+    return a * (1 - v) + b * v;
+}
+}
+
 float Distance(Point a, Point b)
 {
     return std::hypot(a.x - b.x, a.z - b.z);
 }
 
+Tile World::GlobalTile(int x, int z) const
+{
+    if (x >= 0 && z >= 0 && x < Size && z < Size)
+        return tiles[z * Size + x];
+    // All even rows/columns remain connected corridors. Obstacles cannot enclose ground.
+    if ((x & 1) == 0 || (z & 1) == 0)
+        return Tile::Ground;
+    const std::uint32_t h = ForestHash(x, z, mapSeed);
+    // Broad irregular groves and clearings, rather than uniform orchard density.
+    const float grove = ForestNoise(x * .075f, z * .075f, mapSeed ^ 0xa531u);
+    const unsigned treeChance = static_cast<unsigned>(18.f + 65.f * grove);
+    return h % 100 < treeChance ? Tile::Tree : h % 100 < treeChance + 8 ? Tile::Rock : Tile::Ground;
+}
+
 Tile World::At(int x, int z) const
 {
-    if (x < 0 || z < 0 || x >= Size || z >= Size)
-    {
-        return Tile::Rock;
-    }
-    return tiles[z * Size + x];
+    return GlobalTile(x + originX, z + originZ);
+}
+
+bool World::Focus(Point position)
+{
+    const int x = int(std::floor(position.x / (CellSize * 8))) * 8;
+    const int z = int(std::floor(position.z / (CellSize * 8))) * 8;
+    if (x == originX && z == originZ)
+        return false;
+    originX = x;
+    originZ = z;
+    return true;
 }
 
 bool World::IsGround(int x, int z) const
@@ -28,13 +78,27 @@ bool World::IsGround(int x, int z) const
 
 Point World::Center(int x, int z) const
 {
-    return {(x - Size / 2) * CellSize, (z - Size / 2) * CellSize};
+    return {(x + originX - Size / 2) * CellSize, (z + originZ - Size / 2) * CellSize};
+}
+
+Point World::PropPosition(int x, int z) const
+{
+    Point p = Center(x, z);
+    const Tile tile = At(x, z);
+    if (tile != Tile::Tree && tile != Tile::Rock)
+        return p;
+    // Keep trunks within their collision cell and retain translation-only GPU instancing.
+    const auto hx = ForestHash(x + originX, z + originZ, mapSeed ^ 0x17b5u);
+    const auto hz = ForestHash(x + originX, z + originZ, mapSeed ^ 0x9e37u);
+    p.x += ((hx & 65535u) / 65535.f - .5f) * 1.1f;
+    p.z += ((hz & 65535u) / 65535.f - .5f) * 1.1f;
+    return p;
 }
 
 int World::Index(Point position) const
 {
-    const int x = static_cast<int>(std::floor(position.x / CellSize + Size / 2 + .5f));
-    const int z = static_cast<int>(std::floor(position.z / CellSize + Size / 2 + .5f));
+    const int x = static_cast<int>(std::floor(position.x / CellSize + Size / 2 + .5f)) - originX;
+    const int z = static_cast<int>(std::floor(position.z / CellSize + Size / 2 + .5f)) - originZ;
     return x >= 0 && x < Size && z >= 0 && z < Size ? z * Size + x : -1;
 }
 
@@ -47,8 +111,9 @@ bool World::Walkable(Point position, float radius) const
                              {position.x + radius, position.z + radius}};
     for (Point corner : corners)
     {
-        const int cell = Index(corner);
-        if (cell < 0 || tiles[cell] != Tile::Ground)
+        const int x = int(std::floor(corner.x / CellSize + Size / 2 + .5f));
+        const int z = int(std::floor(corner.z / CellSize + Size / 2 + .5f));
+        if (GlobalTile(x, z) != Tile::Ground)
         {
             return false;
         }
@@ -61,7 +126,7 @@ std::vector<int> World::DistancesFrom(Point target) const
     Profiling::Scope profile("world.pathfinding");
     std::vector<int> distances(Size * Size, -1);
     const int start = Index(target);
-    if (start < 0 || tiles[start] != Tile::Ground)
+    if (start < 0 || At(start % Size, start / Size) != Tile::Ground)
     {
         return distances;
     }
@@ -99,7 +164,7 @@ bool World::Connected() const
     const auto distances = DistancesFrom({0, 0});
     for (int cell = 0; cell < Size * Size; ++cell)
     {
-        if (tiles[cell] == Tile::Ground && distances[cell] < 0)
+        if (At(cell % Size, cell / Size) == Tile::Ground && distances[cell] < 0)
         {
             return false;
         }
@@ -110,6 +175,7 @@ bool World::Connected() const
 void World::Generate(std::uint32_t seed)
 {
     Profiling::Scope profile("world.generate");
+    originX = originZ = 0;
     mapSeed = seed;
     tiles.fill(Tile::Ground);
     std::mt19937 random(seed);
@@ -153,7 +219,7 @@ Point World::RandomGround(std::mt19937 &random, float distanceFromCamp) const
     std::vector<int> candidates;
     for (int cell = 0; cell < Size * Size; ++cell)
     {
-        if (tiles[cell] == Tile::Ground &&
+        if (At(cell % Size, cell / Size) == Tile::Ground &&
             Distance(Center(cell % Size, cell / Size), {0, 0}) >= distanceFromCamp)
         {
             candidates.push_back(cell);

@@ -43,6 +43,7 @@ class Renderer
     static void EndFrame();
     static void CountedBegin(GLenum mode);
     static void CountedDrawArrays(GLenum mode, GLint first, GLsizei count);
+    static void CountedDrawInstances(GLsizei vertices, GLsizei instances);
     static void CountToolkitShape();
     void BeginShadow(float cameraX, float cameraZ);
 
@@ -79,7 +80,7 @@ class Renderer
     void MakeMaterials();
     void ReleaseTargets();
     GLuint sceneFbo = 0, sceneColor = 0, sceneDepth = 0, shadowFbo = 0, shadowDepth = 0;
-    GLuint worldProgram = 0, postProgram = 0, materials[MaterialCount] = {};
+    GLuint shadowProgram = 0, worldProgram = 0, postProgram = 0, materials[MaterialCount] = {};
     GLint materialLocation = -1, emissionLocation = -1;
     float lightProjection[16] = {}, lightView[16] = {};
     int width = 1, height = 1;

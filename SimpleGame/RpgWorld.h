@@ -31,7 +31,9 @@ class World
 
     void Generate(std::uint32_t seed);
     Tile At(int x, int z) const;
+    bool Focus(Point position);
     Point Center(int x, int z) const;
+    Point PropPosition(int x, int z) const;
     int Index(Point position) const;
     bool Walkable(Point position, float radius = .27f) const;
     Point RandomGround(std::mt19937 &random, float distanceFromCamp = 5) const;
@@ -41,7 +43,9 @@ class World
     std::uint32_t Seed() const;
 
   private:
+    Tile GlobalTile(int x, int z) const;
     bool IsGround(int x, int z) const;
+    int originX = 0, originZ = 0;
     std::array<Tile, Size * Size> tiles = {};
     std::uint32_t mapSeed = 0;
 };

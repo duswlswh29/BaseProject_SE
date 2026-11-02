@@ -62,6 +62,15 @@ void Renderer::CountedDrawArrays(GLenum mode, GLint first, GLsizei count)
     glDrawArrays(mode, first, count);
 }
 
+void Renderer::CountedDrawInstances(GLsizei vertices, GLsizei instances)
+{
+    ++Profiling::Get().drawCalls;
+    ++arrayCalls;
+    Profiling::Count("geometry.submitted_vertices", double(vertices) * instances);
+    Profiling::Count("render.instances", instances);
+    glDrawArraysInstanced(GL_TRIANGLES, 0, vertices, instances);
+}
+
 void Renderer::CountToolkitShape()
 {
     ++toolkitShapes;
@@ -111,9 +120,10 @@ Renderer::Renderer(int w, int h)
         error = "OpenGL 3.3 compatibility context required";
         return;
     }
+    shadowProgram = Compile(RenderShaders::ShadowVS, RenderShaders::ShadowFS);
     worldProgram = Compile(RenderShaders::WorldVS, RenderShaders::WorldFS);
     postProgram = Compile(RenderShaders::PostVS, RenderShaders::PostFS);
-    if (!worldProgram || !postProgram)
+    if (!worldProgram || !postProgram || !shadowProgram)
         return;
     glUseProgram(worldProgram);
     glUniform1i(glGetUniformLocation(worldProgram, "materialTex"), 0);
@@ -193,6 +203,8 @@ Renderer::~Renderer()
         glDeleteFramebuffers(1, &shadowFbo);
     if (shadowDepth)
         glDeleteTextures(1, &shadowDepth);
+    if (shadowProgram)
+        glDeleteProgram(shadowProgram);
     if (worldProgram)
         glDeleteProgram(worldProgram);
     if (postProgram)
@@ -326,7 +338,7 @@ void Renderer::MakeMaterials()
 void Renderer::BeginShadow(float x, float z)
 {
     shadowPass = true;
-    glUseProgram(0);
+    glUseProgram(shadowProgram);
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, 0);
     glActiveTexture(GL_TEXTURE0);

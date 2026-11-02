@@ -12,6 +12,8 @@
 #include <cmath>
 #include <fstream>
 #include <memory>
+#include <map>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -434,12 +436,19 @@ void UpdateProjectiles(float dt)
                       projectiles.end());
 }
 
+extern ActorId forestRoot;
+void PopulateForest(ActorId terrain);
+
 void UpdateEnemies(float dt)
 {
     Profiling::Scope profile("game.enemy_ai");
     pathTimer -= dt;
     if (pathTimer <= 0)
     {
+        if (world.Focus(player))
+        {
+            PopulateForest(forestRoot);
+        }
         navigation = world.DistancesFrom(player);
         pathTimer = .25f;
     }
@@ -457,6 +466,11 @@ void UpdateEnemies(float dt)
         }
         enemy.cooldown -= dt;
         const float distance = Rpg::Distance(player, enemy.position);
+        if (distance > 45)
+        {
+            Spawn(enemy);
+            continue;
+        }
         if (distance > 10 || Rpg::Distance(player, {0, 0}) < 3)
         {
             continue;
@@ -546,42 +560,70 @@ Actor &AddModel(const std::wstring &name,
     return actor;
 }
 
-void BuildScene()
+ActorId forestRoot = 0;
+ActorId forestGround = 0;
+std::map<std::pair<int, int>, ActorId> forestChunks;
+
+void PopulateForest(ActorId terrain)
 {
-    Profiling::Scope profile("scene.build");
-    scene.Clear();
-    const ActorId level = scene.Create(L"레벨 1").Id();
-    const ActorId terrain = scene.Create(L"정적 지형 청크", level).Id();
-    dynamicRoot = scene.Create(L"동적 오브젝트", level).Id();
-    const ActorId overlay = scene.Create(L"화면 UI").Id();
-
-    Actor &ground = AddModel(L"잔디 지면",
-                             Model::Ground,
-                             terrain,
-                             Placement({-.75f, -.75f}, -.06f, 0, 60, 1, 60),
-                             false);
-    ActorAppearance grass;
-    grass.material = Renderer::Grass;
-    grass.textureRepeat = 30;
-    ground.SetAppearance(grass);
-
+    Profiling::Scope profile("world.forest_stream");
+    const float aspect =
+        float(glutGet(GLUT_WINDOW_WIDTH)) / (std::max)(1, glutGet(GLUT_WINDOW_HEIGHT));
+    const int margin = aspect > 2.1f ? 16 : 8;
+    const float extent = (Rpg::World::Size + margin * 2) * Rpg::World::CellSize;
+    if (!forestGround)
+    {
+        Actor &ground = AddModel(L"잔디 지면", Model::Ground, terrain, Placement({0, 0}), false);
+        ActorAppearance grass;
+        grass.material = Renderer::Grass;
+        grass.textureRepeat = 30;
+        ground.SetAppearance(grass);
+        forestGround = ground.Id();
+    }
+    scene.Find(forestGround)
+        ->SetTransform(Placement({world.Center(20, 20).x - .75f, world.Center(20, 20).z - .75f},
+                                 -.06f,
+                                 0,
+                                 extent,
+                                 1,
+                                 extent));
+    std::set<std::pair<int, int>> retained;
+    unsigned created = 0, removed = 0;
     // Local chunk transforms let a rejected subtree skip all contained props.
     constexpr int ChunkCells = 8;
-    for (int cz = 0; cz < Rpg::World::Size; cz += ChunkCells)
+    for (int cz = -margin; cz < Rpg::World::Size + margin; cz += ChunkCells)
     {
-        for (int cx = 0; cx < Rpg::World::Size; cx += ChunkCells)
+        for (int cx = -margin; cx < Rpg::World::Size + margin; cx += ChunkCells)
         {
             const Point origin = world.Center(cx, cz);
+            const std::pair<int, int> key = {int(std::lround(origin.x / Rpg::World::CellSize)),
+                                             int(std::lround(origin.z / Rpg::World::CellSize))};
+            retained.insert(key);
+            if (forestChunks.count(key))
+                continue;
+            ++created;
             Actor &chunk = scene.Create(L"지형 구역", terrain);
             chunk.SetTransform(Placement(origin));
-            for (int z = cz; z < (std::min)(cz + ChunkCells, Rpg::World::Size); ++z)
+            forestChunks.emplace(key, chunk.Id());
+            for (int z = cz; z < (std::min)(cz + ChunkCells, Rpg::World::Size + margin); ++z)
             {
-                for (int x = cx; x < (std::min)(cx + ChunkCells, Rpg::World::Size); ++x)
+                for (int x = cx; x < (std::min)(cx + ChunkCells, Rpg::World::Size + margin); ++x)
                 {
                     const Rpg::Tile tile = world.At(x, z);
                     if (tile == Rpg::Tile::Ground)
+                    {
+                        if (((key.first + x - cx) * 13 + (key.second + z - cz) * 7) % 11 == 0)
+                        {
+                            const Point p = world.Center(x, z);
+                            AddModel(L"숲 풀",
+                                     Model::GrassTuft,
+                                     chunk.Id(),
+                                     Placement({p.x - origin.x, p.z - origin.z}),
+                                     false);
+                        }
                         continue;
-                    const Point worldPoint = world.Center(x, z);
+                    }
+                    const Point worldPoint = world.PropPosition(x, z);
                     const Point local = {worldPoint.x - origin.x, worldPoint.z - origin.z};
                     const Model model =
                         tile == Rpg::Tile::Tree
@@ -604,6 +646,35 @@ void BuildScene()
             }
         }
     }
+    for (auto it = forestChunks.begin(); it != forestChunks.end();)
+    {
+        if (!retained.count(it->first))
+        {
+            scene.Remove(it->second);
+            it = forestChunks.erase(it);
+            ++removed;
+        }
+        else
+            ++it;
+    }
+    Profiling::Count("world.forest_chunks_created", created);
+    Profiling::Count("world.forest_chunks_removed", removed);
+    Profiling::Count("world.forest_chunks_active", double(forestChunks.size()));
+}
+
+void BuildScene()
+{
+    Profiling::Scope profile("scene.build");
+    scene.Clear();
+    forestChunks.clear();
+    forestGround = 0;
+    const ActorId level = scene.Create(L"레벨 1").Id();
+    const ActorId terrain = scene.Create(L"정적 지형 청크", level).Id();
+    forestRoot = terrain;
+    dynamicRoot = scene.Create(L"동적 오브젝트", level).Id();
+    const ActorId overlay = scene.Create(L"화면 UI").Id();
+
+    PopulateForest(terrain);
     Actor &camp = scene.Create(L"야영지", level);
     Actor &paving = AddModel(
         L"야영지 바닥", Model::Ground, camp.Id(), Placement({0, 0}, -.03f, 0, 5, 1, 5), false);
@@ -773,9 +844,13 @@ void HUD()
     Renderer::CountedBegin(GL_POINTS);
     auto dot = [](Point p, float r, float g, float b)
     {
+        const Point origin = world.Center(0, 0);
+        const float x = (p.x - origin.x) / Rpg::World::CellSize;
+        const float z = (p.z - origin.z) / Rpg::World::CellSize;
+        if (x < 0 || z < 0 || x >= Rpg::World::Size || z >= Rpg::World::Size)
+            return;
         glColor3f(r, g, b);
-        glVertex2f(1052 + (p.x / Rpg::World::CellSize + 20) * 5,
-                   57 + (p.z / Rpg::World::CellSize + 20) * 4.5f);
+        glVertex2f(1052 + x * 5, 57 + z * 4.5f);
     };
     for (const Enemy &enemy : enemies)
         if (enemy.health > 0)

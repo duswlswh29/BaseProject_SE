@@ -2,6 +2,19 @@
 
 namespace RenderShaders
 {
+static const char *ShadowVS = R"GLSL(
+#version 330 compatibility
+layout(location=7) in vec3 instanceOffset;
+uniform bool instanced;
+void main()
+{
+    gl_Position=gl_ModelViewProjectionMatrix*(gl_Vertex+vec4(instanced?instanceOffset:vec3(0),0));
+}
+)GLSL";
+static const char *ShadowFS = R"GLSL(
+#version 330 compatibility
+void main() {}
+)GLSL";
 static const char *WorldVS = R"GLSL(
 #version 330 compatibility
 out vec3 normalEye;
@@ -12,6 +25,8 @@ out vec3 worldPosition;
 out vec3 localPosition;
 out vec3 worldNormal;
 uniform mat4 cameraToWorld;
+layout(location=7) in vec3 instanceOffset;
+uniform bool instanced;
 uniform int effect;
 uniform float effectTime;
 
@@ -28,7 +43,7 @@ void main()
     {
         local.x += sin(effectTime * 4.0 + local.y * 5.0) * local.y * .13;
     }
-    vec4 eye = gl_ModelViewMatrix * local;
+    vec4 eye = gl_ModelViewMatrix * (local + vec4(instanced ? instanceOffset : vec3(0),0));
     normalEye = normalize(gl_NormalMatrix * surfaceNormal);
     worldNormal = normalize(mat3(cameraToWorld)*normalEye);
     worldPosition = (cameraToWorld*eye).xyz;

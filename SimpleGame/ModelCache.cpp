@@ -100,9 +100,8 @@ bool ModelCache::Initialize()
             return false;
         }
         // The disk file is the CPU source for subsequent executions.
-        if (&mesh != &meshes[static_cast<int>(Model::Tree)] &&
-            &mesh != &meshes[static_cast<int>(Model::Rock)])
-            mesh.vertices.clear();
+        // Instancing reuses the GPU mesh; no expanded CPU copies are needed.
+        mesh.vertices.clear();
         mesh.vertices.shrink_to_fit();
     }
     glBindBuffer(GL_ARRAY_BUFFER, 0);
@@ -234,31 +233,33 @@ void ModelCache::DrawBatch(Model model, const std::vector<Vector3> &positions, S
     if (changed)
     {
         Profiling::Scope rebuild("render.static_batch_rebuild");
-        const Mesh &source = meshes[static_cast<std::size_t>(model)];
-        std::vector<Vertex> vertices;
-        vertices.reserve(source.vertices.size() * positions.size());
-        for (const auto &position : positions)
-            for (Vertex vertex : source.vertices)
-            {
-                vertex.position[0] += position.x;
-                vertex.position[1] += position.y;
-                vertex.position[2] += position.z;
-                vertices.push_back(vertex);
-            }
         if (!batch.mesh.buffer)
             glGenBuffers(1, &batch.mesh.buffer);
         glBindBuffer(GL_ARRAY_BUFFER, batch.mesh.buffer);
         glBufferData(
-            GL_ARRAY_BUFFER, vertices.size() * sizeof(Vertex), vertices.data(), GL_DYNAMIC_DRAW);
-        Profiling::Count("geometry.batch_upload_bytes", double(vertices.size() * sizeof(Vertex)));
-        batch.mesh.count = static_cast<GLsizei>(vertices.size());
+            GL_ARRAY_BUFFER, positions.size() * sizeof(Vector3), positions.data(), GL_STREAM_DRAW);
+        Profiling::Count("geometry.instance_upload_bytes",
+                         double(positions.size() * sizeof(Vector3)));
         batch.positions = positions;
         Profiling::Count("render.batch_cache_misses");
     }
     else
         Profiling::Count("render.batch_cache_hits");
     Profiling::Count("render.batched_actors", double(positions.size()));
-    DrawMesh(batch.mesh);
+    if (positions.empty())
+        return;
+    GLint program = 0;
+    glGetIntegerv(GL_CURRENT_PROGRAM, &program);
+    const GLint enabled = glGetUniformLocation(program, "instanced");
+    glUniform1i(enabled, GL_TRUE);
+    glBindBuffer(GL_ARRAY_BUFFER, batch.mesh.buffer);
+    glEnableVertexAttribArray(7);
+    glVertexAttribPointer(7, 3, GL_FLOAT, GL_FALSE, sizeof(Vector3), nullptr);
+    glVertexAttribDivisor(7, 1);
+    DrawMesh(meshes[static_cast<std::size_t>(model)], true, static_cast<GLsizei>(positions.size()));
+    glVertexAttribDivisor(7, 0);
+    glDisableVertexAttribArray(7);
+    glUniform1i(enabled, GL_FALSE);
 }
 
 void ModelCache::DrawTinted(Model model, float r, float g, float b) const
@@ -267,7 +268,7 @@ void ModelCache::DrawTinted(Model model, float r, float g, float b) const
     DrawMesh(meshes[static_cast<int>(model)], false);
 }
 
-void ModelCache::DrawMesh(const Mesh &mesh, bool vertexColors) const
+void ModelCache::DrawMesh(const Mesh &mesh, bool vertexColors, GLsizei instances) const
 {
     glBindBuffer(GL_ARRAY_BUFFER, mesh.buffer);
     glEnableClientState(GL_VERTEX_ARRAY);
@@ -283,7 +284,10 @@ void ModelCache::DrawMesh(const Mesh &mesh, bool vertexColors) const
     glNormalPointer(GL_FLOAT, sizeof(Vertex), reinterpret_cast<void *>(offsetof(Vertex, normal)));
     glColorPointer(4, GL_FLOAT, sizeof(Vertex), reinterpret_cast<void *>(offsetof(Vertex, color)));
     glTexCoordPointer(2, GL_FLOAT, sizeof(Vertex), reinterpret_cast<void *>(offsetof(Vertex, uv)));
-    Renderer::CountedDrawArrays(GL_TRIANGLES, 0, mesh.count);
+    if (instances > 0)
+        Renderer::CountedDrawInstances(mesh.count, instances);
+    else
+        Renderer::CountedDrawArrays(GL_TRIANGLES, 0, mesh.count);
     glDisableClientState(GL_TEXTURE_COORD_ARRAY);
     glDisableClientState(GL_COLOR_ARRAY);
     glDisableClientState(GL_NORMAL_ARRAY);

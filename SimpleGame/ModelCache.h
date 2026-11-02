@@ -121,7 +121,7 @@ class ModelCache
     };
 
     void Generate();
-    void DrawMesh(const Mesh &mesh, bool vertexColors = true) const;
+    void DrawMesh(const Mesh &mesh, bool vertexColors = true, GLsizei instances = 0) const;
 
     struct Batch
     {
