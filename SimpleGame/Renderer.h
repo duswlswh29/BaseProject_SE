@@ -3,7 +3,7 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
-#include "Dependencies/glew.h"
+#include "Dependencies/GLEW/include/GL/glew.h"
 #include <map>
 #include <string>
 #include <vector>

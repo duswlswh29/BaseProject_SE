@@ -6,7 +6,7 @@
 #include "ModelCache.h"
 #include "RpgWorld.h"
 #include "SceneGraph.h"
-#include "Dependencies/freeglut.h"
+#include "WindowPlatform.h"
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -567,8 +567,8 @@ std::map<std::pair<int, int>, ActorId> forestChunks;
 void PopulateForest(ActorId terrain)
 {
     Profiling::Scope profile("world.forest_stream");
-    const float aspect =
-        float(glutGet(GLUT_WINDOW_WIDTH)) / (std::max)(1, glutGet(GLUT_WINDOW_HEIGHT));
+    const float aspect = float(Platform::Get(Platform::WindowWidth)) /
+                         (std::max)(1, Platform::Get(Platform::WindowHeight));
     const int margin = aspect > 2.1f ? 16 : 8;
     const float extent = (Rpg::World::Size + margin * 2) * Rpg::World::CellSize;
     if (!forestGround)
@@ -931,7 +931,7 @@ bool Initialize(int width, int height)
     NewMap();
     Notice(models->Status());
     running = true;
-    lastTime = glutGet(GLUT_ELAPSED_TIME);
+    lastTime = Platform::Get(Platform::ElapsedTime);
     return true;
 }
 
@@ -953,7 +953,7 @@ void Activate()
     confirmNewMap = false;
     mouseAttack = false;
     std::fill(keys, keys + 256, false);
-    lastTime = glutGet(GLUT_ELAPSED_TIME);
+    lastTime = Platform::Get(Platform::ElapsedTime);
 }
 
 void Shutdown()
@@ -1001,7 +1001,7 @@ void Render()
     }
     {
         Profiling::Scope profile("present.swap_buffers", false);
-        glutSwapBuffers();
+        Platform::SwapBuffers();
     }
     Renderer::EndFrame();
 }
@@ -1082,13 +1082,13 @@ void KeyUp(unsigned char key, int, int)
 
 void Mouse(int button, int state, int, int)
 {
-    if (button == GLUT_LEFT_BUTTON)
-        mouseAttack = state == GLUT_DOWN && !paused && !inventoryOpen && !confirmNewMap;
+    if (button == Platform::LeftButton)
+        mouseAttack = state == Platform::Down && !paused && !inventoryOpen && !confirmNewMap;
 }
 
 void Visibility(int state)
 {
-    if (state != GLUT_VISIBLE)
+    if (state != Platform::Visible)
     {
         paused = true;
         std::fill(keys, keys + 256, false);
@@ -1104,9 +1104,9 @@ void Tick(int)
     Profiling::Count("io.save_failures_total", saveFailures);
     if (!pendingSave.valid())
         Profiling::Count("io.save_last_ms", lastSaveMs);
-    if (!running || glutGetWindow() == 0)
+    if (!running || Platform::HasWindow() == 0)
         return;
-    const int now = glutGet(GLUT_ELAPSED_TIME);
+    const int now = Platform::Get(Platform::ElapsedTime);
     const float dt = (std::min)((now - lastTime) / 1000.f, .05f);
     lastTime = now;
     if (!paused && !inventoryOpen && !confirmNewMap)
@@ -1149,6 +1149,6 @@ void Tick(int)
                 Notice(L"자동 저장 실패: 실행 폴더의 쓰기 권한을 확인하세요.");
         }
     }
-    glutPostRedisplay();
+    Platform::RequestRedraw();
 }
 }

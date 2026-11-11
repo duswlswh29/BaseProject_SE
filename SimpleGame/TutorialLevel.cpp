@@ -9,7 +9,7 @@
 #include "SceneGraph.h"
 #include "ModelCache.h"
 #include <utility>
-#include "Dependencies/freeglut.h"
+#include "WindowPlatform.h"
 #include <memory>
 #include <algorithm>
 #include <cmath>
@@ -497,7 +497,7 @@ void Reset()
     }
     moving = false;
     facing = 0;
-    last = glutGet(GLUT_ELAPSED_TIME);
+    last = Platform::Get(Platform::ElapsedTime);
     ResetPopulation();
     BuildScene();
 }
@@ -1071,7 +1071,7 @@ void KeyUp(unsigned char k, int, int)
 
 void Visibility(int state)
 {
-    if (state != GLUT_VISIBLE)
+    if (state != Platform::Visible)
     {
         paused = true;
         std::fill(keys, keys + 256, false);
@@ -1083,19 +1083,19 @@ void Activate()
     paused = false;
     mouseAttack = false;
     std::fill(keys, keys + 256, false);
-    last = glutGet(GLUT_ELAPSED_TIME);
+    last = Platform::Get(Platform::ElapsedTime);
 }
 
 void Mouse(int button, int state, int, int)
 {
-    if (button == GLUT_LEFT_BUTTON)
-        mouseAttack = state == GLUT_DOWN && !paused && dialog.empty();
+    if (button == Platform::LeftButton)
+        mouseAttack = state == Platform::Down && !paused && dialog.empty();
 }
 
 void Tick(int)
 {
     Profiling::Scope profile("game.update");
-    int now = glutGet(GLUT_ELAPSED_TIME);
+    int now = Platform::Get(Platform::ElapsedTime);
     float dt = (std::min)((now - last) / 1000.f, .05f);
     last = now;
     if (!paused)
@@ -1168,7 +1168,7 @@ void Tick(int)
         camera.x += (player.x - camera.x) * b;
         camera.z += (player.z - camera.z) * b;
     }
-    glutPostRedisplay();
+    Platform::RequestRedraw();
 }
 
 void Resize(int width, int height)
@@ -2020,8 +2020,8 @@ void SyncScene()
 {
     Profiling::Scope profile("scene.sync");
     // Account for wide windows as well as the rotated orthographic view.
-    const float aspect =
-        float(glutGet(GLUT_WINDOW_WIDTH)) / (std::max)(1, glutGet(GLUT_WINDOW_HEIGHT));
+    const float aspect = float(Platform::Get(Platform::WindowWidth)) /
+                         (std::max)(1, Platform::Get(Platform::WindowHeight));
     groundChunkSize = (std::max)(64.f, std::ceil((22.f * aspect + 44.f) / 32.f) * 32.f);
     const float centerX = std::floor(camera.x / groundChunkSize) * groundChunkSize;
     const float centerZ = std::floor(camera.z / groundChunkSize) * groundChunkSize;
@@ -2375,7 +2375,7 @@ void Render()
     }
     {
         Profiling::Scope profile("present.swap_buffers", false);
-        glutSwapBuffers();
+        Platform::SwapBuffers();
     }
     PublishMonitoring();
     Renderer::EndFrame();
