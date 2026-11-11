@@ -21,3 +21,8 @@
 
 # Intermediate files from direct project builds.
 /SimpleGame/SimpleGame/
+
+# Keep project JSON resources and configuration eligible for version control.
+!*.json
+!*.jsonc
+!*.json5
